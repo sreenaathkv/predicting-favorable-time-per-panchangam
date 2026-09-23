@@ -1,0 +1,77 @@
+{
+  "skill_name": "predicting-favorable-time-per-panchangam",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Hey, can you find favorable days/times for me? My name is Jai, my birth nakshatram (star) is Uthiradam, I'm generally free on Mondays and Wednesdays, and I live in Chennai. Just look 1 month out starting September 2026.",
+      "expected_output": "Claude confirms it has all required inputs (person, nakshatram, favorable weekdays, city, starting month, forward-looking months), then runs `panchangam_utils.py` (or calls `fetch_favorable_month_days` directly) with person=Jai, input_nakshatram=Uthiradam, fav_days_of_week=[Monday, Wednesday], input_city_name=Chennai, starting_month_year='September 2026', forward_looking_months=1. It should end up with a `Jai_output_dir/Jai/September_2026.txt` file and a consolidated `Jai_output_dir/Jai/Jai_September_2026_1.json`, and present the September 2026 favorable dates/time-windows to the user as a readable table (date + favorable window), not as a raw JSON dump.",
+      "assertions": [
+        {
+          "text": "A per-person output directory (default `Jai_output_dir/Jai/`, or an explicitly requested output_dir) is created",
+          "type": "manual"
+        },
+        {
+          "text": "A per-month .txt file for September 2026 exists in that directory",
+          "type": "manual"
+        },
+        {
+          "text": "A consolidated JSON file named `{person}_{starting_month_year}_{forward_looking_months}.json` (e.g. `Jai_September_2026_1.json`) exists in that directory and its `months` array has exactly 1 entry",
+          "type": "manual"
+        },
+        {
+          "text": "The final chat response presents results as a table (date, favorable window/time), not a raw JSON blob pasted into the conversation",
+          "type": "manual"
+        },
+        {
+          "text": "Only Mondays and Wednesdays in September 2026 appear as candidate/favorable dates — no other weekdays",
+          "type": "manual"
+        }
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Can you check favorable timings for my dad? His name is Ravi, nakshatram is Pooradam, good days are Tuesday and Friday, he lives in Springfield, starting October 2026, just look 2 months ahead.",
+      "expected_output": "Springfield matches 8+ distinct US cities in geonamescache with no state given, so `resolve_geoname_id`/`fetch_favorable_month_days` raises `AmbiguousCityError` (or the CLI exits non-zero printing the candidate list to stderr). Claude should notice the ambiguity and ask the user which Springfield (state/country) they mean — per SKILL.md's own city disambiguation guidance — rather than silently guessing the most populous match or fabricating results.",
+      "assertions": [
+        {
+          "text": "Claude does not silently pick one Springfield (e.g. the most populous) and present results as if the city were unambiguous",
+          "type": "manual"
+        },
+        {
+          "text": "Claude asks the user to clarify which Springfield (state/country), surfacing at least a couple of the real candidate states from the AmbiguousCityError/candidate list",
+          "type": "manual"
+        },
+        {
+          "text": "No output_dir/JSON files are fabricated for an unresolved city before the user clarifies",
+          "type": "manual"
+        }
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I need a favorable-time report for Sreenaath. Birth star is Uthiradam, favorable weekdays are Wednesday, Friday, Saturday and Monday, city is Sunnyvale, CA, starting month September 2026, and project it out 3 months. Save the output under an 'output_results' directory.",
+      "expected_output": "Claude runs the skill with person=Sreenaath, input_nakshatram=Uthiradam, fav_days_of_week=[Wednesday, Friday, Saturday, Monday], input_city_name='Sunnyvale, CA', starting_month_year='September 2026', forward_looking_months=3, output_dir='output_results'. It should produce 3 monthly .txt files plus one consolidated `Sreenaath_September_2026_3.json` under `output_results/Sreenaath/`, and present a per-month table to the user. Per the documented regression history (scripts/CLAUDE.md, prompt.md Prompt 4), it must NOT mark a day favorable just because one of nakshatram-window or yogam-window covers the whole day while the other has a same-day cutoff — favorability requires both signals to overlap in the same sub-window.",
+      "assertions": [
+        {
+          "text": "Output directory used is `output_results/Sreenaath/` (the user's explicit output_dir is respected, not the default `{person}_output_dir`)",
+          "type": "manual"
+        },
+        {
+          "text": "Exactly 3 per-month .txt files are produced (September, October, November 2026) plus one consolidated JSON `Sreenaath_September_2026_3.json`",
+          "type": "manual"
+        },
+        {
+          "text": "Only Monday/Wednesday/Friday/Saturday dates appear in the results",
+          "type": "manual"
+        },
+        {
+          "text": "No favorable entry is reported for a date/time where only one of (favorable nakshatram, favorable yogam) holds and the other doesn't overlap that window — spot-check against scripts/CLAUDE.md's documented Sept 2026 Sunnyvale regression cases if any of those dates appear in range",
+          "type": "manual"
+        }
+      ],
+      "files": []
+    }
+  ]
+}

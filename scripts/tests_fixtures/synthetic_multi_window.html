@@ -1,0 +1,34 @@
+<!--
+Hand-crafted fixture (NOT a real drikpanchang capture) to exercise the case
+where nakshatram stays constant all day (Aswini) but Tamil Yogam changes
+twice, producing two disjoint favorable windows for input_nakshatram="Uthiradam":
+  - Siddha (favorable) until 10:00 AM
+  - Marana (not favorable) 10:00 AM to 06:00 PM
+  - Amrutha (favorable) from 06:00 PM onward
+Expected: "until 10:00 AM; from 06:00 PM onwards"
+-->
+<div class="dpCard dpDayPanchangWrapper">
+  <h2 class="dpCardTitle dpLeftGridTitle">Thursday, January 1, 2026</h2>
+  <div class="dpPanchang">
+    <p class="dpElement">
+      <span class="dpElementKey"><a href="/tutorials/nakshatra/nakshatra.html">Nakshathram</a></span>
+      <span class="dpElementValue">
+        <a href="javascript:void(0);" title="next Bharani (2)">Aswini</a>
+        <span class="dpOffColor">upto</span> 03:00 <span class="dpTimeStamp">AM</span>,
+        <span class="dpInlineBlock">Jan 02</span>
+      </span>
+    </p>
+    <p class="dpElement">
+      <span class="dpElementKey">Tamil Yoga</span>
+      <span class="dpElementValue">Siddha <span class="dpOffColor">upto</span> 10:00 <span class="dpTimeStamp">AM</span></span>
+    </p>
+    <p class="dpElement">
+      <span class="dpElementKey">Tamil Yoga</span>
+      <span class="dpElementValue">Marana <span class="dpOffColor">upto</span> 06:00 <span class="dpTimeStamp">PM</span></span>
+    </p>
+    <p class="dpElement">
+      <span class="dpElementKey">Tamil Yoga</span>
+      <span class="dpElementValue">Amrutha</span>
+    </p>
+  </div>
+</div>
