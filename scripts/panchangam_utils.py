@@ -751,6 +751,27 @@ def _slugify_person_name(person):
     return _slugify_for_filename(person, label="person")
 
 
+def _slugify_city_name(input_city_name):
+    """Turn a city name (with any ", state"/", country" qualifier) into a safe folder name.
+
+    E.g. "Sunnyvale" -> "Sunnyvale", "Springfield, IL" -> "Springfield_IL".
+    See _slugify_for_filename.
+    """
+    return _slugify_for_filename(input_city_name, label="input_city_name")
+
+
+def _person_city_output_dir(output_dir, person, input_city_name):
+    """Return (creating it if needed) `{output_dir}/{slugified person}/{slugified city}`.
+
+    Results are split per city so running the same person against a second
+    city doesn't overwrite the first city's .txt/.json files (their file
+    names carry the person and month but not the city).
+    """
+    city_dir = Path(output_dir) / _slugify_person_name(person) / _slugify_city_name(input_city_name)
+    city_dir.mkdir(parents=True, exist_ok=True)
+    return city_dir
+
+
 def _format_month_file_contents(person, input_nakshatram, input_city_name, month_entry):
     header = [
         f"Favorable days for {person}",
@@ -764,9 +785,8 @@ def _format_month_file_contents(person, input_nakshatram, input_city_name, month
 
 
 def _write_month_file(person, input_nakshatram, input_city_name, output_dir, month_entry):
-    person_dir = Path(output_dir) / _slugify_person_name(person)
-    person_dir.mkdir(parents=True, exist_ok=True)
-    file_path = person_dir / f"{month_entry['month']}_{month_entry['year']}.txt"
+    city_dir = _person_city_output_dir(output_dir, person, input_city_name)
+    file_path = city_dir / f"{month_entry['month']}_{month_entry['year']}.txt"
     file_path.write_text(
         _format_month_file_contents(person, input_nakshatram, input_city_name, month_entry),
         encoding="utf-8",
@@ -794,8 +814,8 @@ def collate_and_save_predictions(
     builds up, one dict per month) into a single JSON document with a
     tabular "favorable_days" row list (columns: date, prediction) per month,
     and writes it to
-    `{output_dir}/{slugified person}/{slugified person}_{slugified starting_month_year}_{forward_looking_months}.json`
-    (the same per-person subfolder each month's .txt file already lives in).
+    `{output_dir}/{slugified person}/{slugified city}/{slugified person}_{slugified starting_month_year}_{forward_looking_months}.json`
+    (the same per-person, per-city subfolder each month's .txt file already lives in).
 
     Returns the path the consolidated file was written to.
     """
@@ -819,14 +839,13 @@ def collate_and_save_predictions(
         "months": months_table,
     }
 
-    person_dir = Path(output_dir) / _slugify_person_name(person)
-    person_dir.mkdir(parents=True, exist_ok=True)
+    city_dir = _person_city_output_dir(output_dir, person, input_city_name)
     file_name = (
         f"{_slugify_person_name(person)}_"
         f"{_slugify_for_filename(starting_month_year, label='starting_month_year')}_"
         f"{forward_looking_months}.json"
     )
-    file_path = person_dir / file_name
+    file_path = city_dir / file_name
     file_path.write_text(json.dumps(consolidated, indent=2, ensure_ascii=False), encoding="utf-8")
     return file_path
 
@@ -878,8 +897,9 @@ def fetch_favorable_month_days(
     resolve_geoname_id for details.
 
     Results are always additionally persisted to disk, as one text file per
-    forward-looking month, under `{output_dir}/{person}/{Month}_{Year}.txt`
-    (`person` is sanitized into a safe folder name for that subfolder). If
+    forward-looking month, under `{output_dir}/{person}/{city}/{Month}_{Year}.txt`
+    (`person` and `input_city_name` are each sanitized into a safe folder name
+    for those subfolders, e.g. "Springfield, IL" -> "Springfield_IL"). If
     `output_dir` isn't given, it defaults to `f"{person}_output_dir"` (a path
     relative to the current working directory). Each returned month dict
     gets an "output_file" key holding that path (a string).
@@ -887,7 +907,7 @@ def fetch_favorable_month_days(
     Once every month has been fetched and saved, all of them are also
     collated into one consolidated tabular JSON file (see
     collate_and_save_predictions) at
-    `{output_dir}/{person}/{person}_{starting_month_year}_{forward_looking_months}.json`;
+    `{output_dir}/{person}/{city}/{person}_{starting_month_year}_{forward_looking_months}.json`;
     every returned month dict gets a "consolidated_output_file" key holding
     that same path (a string).
 
@@ -906,6 +926,7 @@ def fetch_favorable_month_days(
         raise ValueError("person must be a non-empty string")
     if output_dir is None:
         output_dir = f"{person}_output_dir"
+    _slugify_city_name(input_city_name)  # fail fast, before any network requests
 
     favorable_indices = favorable_nakshatram_indices(input_nakshatram)
     geoname_id = resolve_geoname_id(input_city_name, chooser=city_chooser, interactive=interactive)

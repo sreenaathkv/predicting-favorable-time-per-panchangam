@@ -17,7 +17,13 @@ User should be asked to provide the following mandatory details for this skill t
 - **Prediction Months** -- This could also be referred as Forward_Looking_Months. This basically is number of months for which the user requires the favorable day/times to be predicted. It could be any number of months from 1+.
 
 ## Lack of inputs or how to proceed when there is ambiguity
-When a user asks something like "is there an auspicious date to start X" or "muhurtham for Y" or "Find me a good day and time to buy a car", explicitly prompt the user to input the required arguments for executing the Predictor script (panchangam_utils.py) under scripts/ folder. For list of required arguments from user, refer to the above section ('When inputs are provided, per the requirement').
+When a user asks something like "is there an auspicious date to start X" or "muhurtham for Y" or "Find me a good day and time to buy a car", explicitly prompt the user to input the required arguments for executing the Predictor script (panchangam_utils.py) under scripts/ folder. For list of required arguments from user, refer to the above section ('When inputs are provided, per the requirement'). 
+a) For example, when favorable days of the week input is missing, please prompt the user with all days of the week as choice to pick from and validate them.
+b) For Example, if city input field is missing, please prompt the user with freeform text to input the city. Please mention to the user to enter the city name along wtih state and country to be precise and validate them.
+c) For example, when starting "Starting Month, Year" or "Prediction Months" input is missing, please prompt the user to input the values and validate them.
+d) For Example, if Birth Nakshatram input field is missing, please prompt the user to input the Birth Nakshatram and validate that is one among the 27 Tamil Nakshatrams (refer references/domain_knowledge.md).
+e) For example, if the person name is missing, request the user to provide one.
+
 
 # Workflow
 **Step 1: Sanitization** - First confirm if all the details from the user required for this skill, as mentioned in the Input Format section are available. If not, prompt and get additional details.
@@ -30,14 +36,14 @@ cd scripts && python3 -m venv .venv && source .venv/bin/activate && pip install 
 ```
 
 **Step 3 : Report to user** - 
-a) The above step (Step 2) runs through complex calculation by finding intersection of favorable days of the week AND favorable nakshatrams relative to birth nakshatram AND favorable yogam (Siddha or Amrutha Tamil yogam). When combination of all three of them exists for a given day, that narrow window of time becomes a favorable time for that person. The above step should produce the results for the person in either user provided 'output_dir' argument or '{person}_output_dir' directory relative to the current directory of execution.
+a) The above step (Step 2) runs through complex calculation by finding intersection of favorable days of the week AND favorable nakshatrams relative to birth nakshatram AND favorable yogam (Siddha or Amrutha Tamil yogam). When combination of all three of them exists for a given day, that narrow window of time becomes a favorable time for that person. The above step should produce the results for the person under a per-person, per-city subfolder `{person}/{city}/` of either the user provided 'output_dir' argument or the '{person}_output_dir' directory relative to the current directory of execution (e.g. `Sai_output_dir/Sai/Chennai/`). Keeping each city in its own subfolder means running the same person for a second city does not overwrite the first city's results.
 
-b) Once, for each month, the prediction .txt files are created, the script automatically collates them across months and will create a JSON file with consolidated view in the same "output_dir" specific to the person with the following naming convention {person}_{starting_month_year}_{forward_looking_months}.json.
+b) Once, for each month, the prediction .txt files are created, the script automatically collates them across months and will create a JSON file with consolidated view in the same per-person, per-city folder (`{output_dir}/{person}/{city}/`) with the following naming convention {person}_{starting_month_year}_{forward_looking_months}.json.
 
 c) Once the consolidated view is generated in {person}_{starting_month_year}_{forward_looking_months}.json file, please display the same to  user in a nice tabular form, across months, for all the projected months and years (refer to assets/output_template.md).
 
 # Output Files
---{person}_{output_dir}/{person}
+--{output_dir}/{person}/{city}          (output_dir defaults to {person}_output_dir)
    |
    |- {starting_month_year}.txt
    |

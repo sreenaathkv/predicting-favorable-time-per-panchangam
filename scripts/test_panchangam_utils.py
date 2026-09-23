@@ -863,6 +863,30 @@ class TestSlugifyPersonName(unittest.TestCase):
             pu._slugify_person_name("!!!///...")
 
 
+class TestSlugifyCityName(unittest.TestCase):
+    def test_plain_city_name_is_unchanged(self):
+        self.assertEqual(pu._slugify_city_name("Sunnyvale"), "Sunnyvale")
+
+    def test_state_and_country_qualifiers_are_kept_but_sanitized(self):
+        self.assertEqual(pu._slugify_city_name("Springfield, IL"), "Springfield_IL")
+        self.assertEqual(
+            pu._slugify_city_name("Springfield, Illinois, USA"), "Springfield_Illinois_USA"
+        )
+
+    def test_multi_word_city_name(self):
+        self.assertEqual(pu._slugify_city_name("New York"), "New_York")
+
+    def test_path_traversal_attempt_cannot_escape_person_dir(self):
+        slug = pu._slugify_city_name("../../etc")
+        self.assertNotIn("/", slug)
+        self.assertNotIn("..", slug)
+
+    def test_empty_or_unsanitizable_city_raises_value_error(self):
+        for bad in ("", "   ", None, "///..."):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                pu._slugify_city_name(bad)
+
+
 class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
     def _empty_month_session(self):
         return _FixtureSession(
@@ -940,7 +964,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
-            expected_dir = Path(tmp_dir) / "sreenaath_output_dir" / "sreenaath"
+            expected_dir = Path(tmp_dir) / "sreenaath_output_dir" / "sreenaath" / "Chennai"
             self.assertTrue(expected_dir.is_dir())
             expected_file = expected_dir / "January_2026.txt"
             self.assertTrue(expected_file.exists())
@@ -949,7 +973,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
             # relative (to whatever the cwd was at call time) too.
             self.assertEqual(
                 result[0]["output_file"],
-                str(Path("sreenaath_output_dir") / "sreenaath" / "January_2026.txt"),
+                str(Path("sreenaath_output_dir") / "sreenaath" / "Chennai" / "January_2026.txt"),
             )
 
     def test_default_output_dir_is_relative_not_absolute(self):
@@ -995,7 +1019,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
                 session=self._empty_month_session(),
             )
             self.assertEqual(
-                result[0]["output_file"], str(Path(tmp_dir) / "sreenaath" / "January_2026.txt")
+                result[0]["output_file"], str(Path(tmp_dir) / "sreenaath" / "Chennai" / "January_2026.txt")
             )
             self.assertFalse((Path.cwd() / "sreenaath_output_dir").exists())
 
@@ -1015,7 +1039,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
                 person="Sreenaath",
                 output_dir=tmp_dir,
             )
-            person_dir = Path(tmp_dir) / "Sreenaath"
+            person_dir = Path(tmp_dir) / "Sreenaath" / "Chennai"
             written_files = sorted(p.name for p in person_dir.glob("*.txt"))
             self.assertEqual(
                 written_files, ["February_2026.txt", "January_2026.txt", "March_2026.txt"]
@@ -1046,7 +1070,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
                 person="Sreenaath",
                 output_dir=tmp_dir,
             )
-            contents = (Path(tmp_dir) / "Sreenaath" / "January_2026.txt").read_text()
+            contents = (Path(tmp_dir) / "Sreenaath" / "Chennai" / "January_2026.txt").read_text()
         self.assertIn("Favorable days for Sreenaath", contents)
         self.assertIn("Nakshatram: Bharani", contents)
         self.assertIn("City: Chennai", contents)
@@ -1069,7 +1093,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
                 person="Sreenaath",
                 output_dir=tmp_dir,
             )
-            contents = (Path(tmp_dir) / "Sreenaath" / "January_2026.txt").read_text()
+            contents = (Path(tmp_dir) / "Sreenaath" / "Chennai" / "January_2026.txt").read_text()
         self.assertIn("No favorable days found.", contents)
 
     def test_person_name_with_spaces_is_sanitized_into_folder_name(self):
@@ -1088,7 +1112,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
                 person="Sree Naath",
                 output_dir=tmp_dir,
             )
-            self.assertTrue((Path(tmp_dir) / "Sree_Naath" / "January_2026.txt").exists())
+            self.assertTrue((Path(tmp_dir) / "Sree_Naath" / "Chennai" / "January_2026.txt").exists())
 
     def test_output_files_are_overwritten_on_repeat_calls(self):
         import tempfile
@@ -1107,8 +1131,60 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
                     person="Sreenaath",
                     output_dir=tmp_dir,
                 )
-            person_dir = Path(tmp_dir) / "Sreenaath"
+            person_dir = Path(tmp_dir) / "Sreenaath" / "Chennai"
             self.assertEqual(len(list(person_dir.glob("*.txt"))), 1)
+
+    def test_same_person_different_cities_do_not_overwrite_each_other(self):
+        # Regression test: results used to live directly under
+        # {output_dir}/{person}/, and neither the .txt nor the .json file name
+        # carries the city, so running the same person/month for a second
+        # city silently overwrote the first city's results.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for city in ("Chennai", "Sunnyvale"):
+                fetch_favorable_month_days(
+                    ["Monday"],
+                    "Uthiradam",
+                    city,
+                    "January 2026",
+                    forward_looking_months=1,
+                    use_cache=False,
+                    request_delay_seconds=0,
+                    session=self._empty_month_session(),
+                    person="Sreenaath",
+                    output_dir=tmp_dir,
+                )
+            person_dir = Path(tmp_dir) / "Sreenaath"
+            self.assertEqual(sorted(p.name for p in person_dir.iterdir()), ["Chennai", "Sunnyvale"])
+            for city in ("Chennai", "Sunnyvale"):
+                with self.subTest(city=city):
+                    txt = person_dir / city / "January_2026.txt"
+                    self.assertIn(f"City: {city}", txt.read_text())
+                    self.assertTrue((person_dir / city / "Sreenaath_January_2026_1.json").exists())
+
+    def test_qualified_city_name_is_sanitized_into_folder_name(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = fetch_favorable_month_days(
+                ["Monday"],
+                "Uthiradam",
+                "Sunnyvale, CA",
+                "January 2026",
+                forward_looking_months=1,
+                use_cache=False,
+                request_delay_seconds=0,
+                session=self._empty_month_session(),
+                person="Sreenaath",
+                output_dir=tmp_dir,
+            )
+            expected_dir = Path(tmp_dir) / "Sreenaath" / "Sunnyvale_CA"
+            self.assertEqual(result[0]["output_file"], str(expected_dir / "January_2026.txt"))
+            self.assertEqual(
+                result[0]["consolidated_output_file"],
+                str(expected_dir / "Sreenaath_January_2026_1.json"),
+            )
 
 
 class TestSplitFavorableEntryIntoRow(unittest.TestCase):
@@ -1191,7 +1267,7 @@ class TestCollateAndSavePredictions(unittest.TestCase):
             )
             self.assertEqual(
                 file_path,
-                Path(tmp_dir) / "Sreenaath" / "Sreenaath_September_2026_2.json",
+                Path(tmp_dir) / "Sreenaath" / "Sunnyvale" / "Sreenaath_September_2026_2.json",
             )
             self.assertTrue(file_path.exists())
 
@@ -1280,12 +1356,13 @@ class TestCollateAndSavePredictions(unittest.TestCase):
                 [{"month": "September", "year": 2026, "fav_days_with_ts": [], "output_file": "x"}],
             )
             self.assertEqual(file_path.name, "Sree_Naath_September_2026_1.json")
-            self.assertEqual(file_path.parent.name, "Sree_Naath")
+            self.assertEqual(file_path.parent.name, "Sunnyvale")
+            self.assertEqual(file_path.parent.parent.name, "Sree_Naath")
             data = json.loads(file_path.read_text(encoding="utf-8"))
         # The raw (unsanitized) person name is preserved in the file's content.
         self.assertEqual(data["person"], "Sree Naath")
 
-    def test_lives_in_same_person_subfolder_as_monthly_txt_files(self):
+    def test_lives_in_same_person_city_subfolder_as_monthly_txt_files(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1344,7 +1421,7 @@ class TestFetchFavorableMonthDaysCollation(unittest.TestCase):
                 request_delay_seconds=0,
                 session=self._empty_month_session(),
             )
-            person_dir = Path(tmp_dir) / "Sreenaath"
+            person_dir = Path(tmp_dir) / "Sreenaath" / "Chennai"
             consolidated_path = person_dir / "Sreenaath_January_2026_2.json"
             self.assertTrue(consolidated_path.exists())
             # The monthly .txt files are still there too, side by side.
@@ -1378,7 +1455,7 @@ class TestFetchFavorableMonthDaysCollation(unittest.TestCase):
                 request_delay_seconds=0,
                 session=session,
             )
-            consolidated_path = Path(tmp_dir) / "Sreenaath" / "Sreenaath_January_2026_1.json"
+            consolidated_path = Path(tmp_dir) / "Sreenaath" / "Chennai" / "Sreenaath_January_2026_1.json"
             data = json.loads(consolidated_path.read_text(encoding="utf-8"))
 
         self.assertEqual(
@@ -1656,7 +1733,7 @@ class TestMainFunction(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("January 2026:", output)
             self.assertIn("saved to", output)
-            written_file = Path(tmp_dir) / "TestCliPerson" / "January_2026.txt"
+            written_file = Path(tmp_dir) / "TestCliPerson" / "Chennai" / "January_2026.txt"
             self.assertTrue(written_file.exists())
 
     def test_prints_and_writes_consolidated_summary(self):
@@ -1673,7 +1750,7 @@ class TestMainFunction(unittest.TestCase):
             )
             self.assertEqual(exit_code, 0)
             self.assertIn("Consolidated summary saved to", output)
-            consolidated_file = Path(tmp_dir) / "TestCliPerson" / "TestCliPerson_January_2026_1.json"
+            consolidated_file = Path(tmp_dir) / "TestCliPerson" / "Chennai" / "TestCliPerson_January_2026_1.json"
             self.assertTrue(consolidated_file.exists())
             self.assertIn(str(consolidated_file), output)
 
@@ -1724,7 +1801,7 @@ class TestMainFunction(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
             self.assertEqual(exit_code, 0)
-            expected_file = Path(tmp_dir) / "TestCliPerson_output_dir" / "TestCliPerson" / "January_2026.txt"
+            expected_file = Path(tmp_dir) / "TestCliPerson_output_dir" / "TestCliPerson" / "Chennai" / "January_2026.txt"
             self.assertTrue(expected_file.exists())
 
 
@@ -1750,7 +1827,7 @@ class TestFetchFavorableMonthDaysDirectInvocation(unittest.TestCase):
             )
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0]["month"], "January")
-            written_file = Path(tmp_dir) / "TestScriptPerson" / "January_2026.txt"
+            written_file = Path(tmp_dir) / "TestScriptPerson" / "Chennai" / "January_2026.txt"
             self.assertTrue(written_file.exists())
             self.assertEqual(result[0]["output_file"], str(written_file))
 
@@ -1787,7 +1864,7 @@ class TestCliSubprocess(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, msg=completed.stderr)
             self.assertIn("January 2026:", completed.stdout)
-            written_file = Path(tmp_dir) / "SubprocessPerson" / "January_2026.txt"
+            written_file = Path(tmp_dir) / "SubprocessPerson" / "Chennai" / "January_2026.txt"
             self.assertTrue(written_file.exists())
 
     def test_cli_invocation_with_bad_input_exits_nonzero_with_error_message(self):
