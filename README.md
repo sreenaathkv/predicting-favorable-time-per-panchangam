@@ -61,6 +61,13 @@ Results go to `{person}_output_dir/{person}/{city}/` in your current directory: 
 `.txt` file per month, plus a consolidated JSON. Claude then shows the results as a
 table for each month.
 
+## Viewing results
+
+Open the [Panchangam Viewer](https://sreenaathkv.github.io/predicting-favorable-time-per-panchangam/)
+(or `viewer/index.html` locally) and pick a result `.json`, or the whole
+`{person}_output_dir/` folder, to browse favorable days in list and calendar views.
+Files are read in your browser and never uploaded. See [`viewer/`](viewer/README.md).
+
 ## Notes and limitations
 
 - Timings come from drikpanchang.com and are shown in the city's local time.

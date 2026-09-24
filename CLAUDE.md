@@ -39,6 +39,15 @@ direct import) — see `TestCollateAndSavePredictions` and
 skill-creator-format eval prompts for this skill (see "Evaluating this
 skill" below).
 
+`viewer/` is a separate, build-free static page (React UMD + htm, one
+`index.html`) that renders the consolidated JSON in the browser; it's published
+to GitHub Pages by `.github/workflows/pages.yml` and is intentionally *not*
+inside `plugins/` so it isn't shipped with the skill. It parses the
+`prediction` strings built by `_build_favorable_entry` ("Entire day" / "until
+T" / "from T onwards" / "from T to T", joined by "; ", optional "(favorable
+until …)" suffix) — keep `parsePrediction()`/`validate()` there in sync with
+any change to that format or to `collate_and_save_predictions`' JSON shape.
+
 ## What the skill does
 
 Given a person's birth Nakshatram (star), their favorable weekdays, and a

@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panchangam Viewer</title>
+<meta name="description" content="View favorable days and times produced by the predicting-favorable-time-per-panchangam Claude Code skill. Files are read locally in your browser and never uploaded.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='7' fill='%23c2410c'/%3E%3Cg stroke='%23c2410c' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M16 2v4M16 26v4M2 16h4M26 16h4M6 6l3 3M23 23l3 3M6 26l3-3M23 9l3-3'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #faf7f2;
+  --surface: #ffffff;
+  --surface-2: #f3eee6;
+  --border: #e4dccf;
+  --text: #2a2420;
+  --muted: #6f655c;
+  --accent: #c2410c;
+  --accent-soft: #fde8dc;
+  --full: #15803d;
+  --full-soft: #dcf3e3;
+  --partial: #b45309;
+  --partial-soft: #fcefd6;
+  --track: #ece5da;
+  --focus: #2563eb;
+  --shadow: 0 1px 2px rgb(42 36 32 / .06), 0 4px 16px rgb(42 36 32 / .05);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171412;
+    --surface: #211d1a;
+    --surface-2: #2a2521;
+    --border: #3a332d;
+    --text: #efe8e0;
+    --muted: #a99e93;
+    --accent: #fb923c;
+    --accent-soft: #3d2517;
+    --full: #4ade80;
+    --full-soft: #173323;
+    --partial: #fbbf24;
+    --partial-soft: #3a2c10;
+    --track: #332c26;
+    --focus: #60a5fa;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171412;
+  --surface: #211d1a;
+  --surface-2: #2a2521;
+  --border: #3a332d;
+  --text: #efe8e0;
+  --muted: #a99e93;
+  --accent: #fb923c;
+  --accent-soft: #3d2517;
+  --full: #4ade80;
+  --full-soft: #173323;
+  --partial: #fbbf24;
+  --partial-soft: #3a2c10;
+  --track: #332c26;
+  --focus: #60a5fa;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+
+header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+header.top h1 { font-size: 18px; margin: 0; display: flex; align-items: center; gap: 8px; letter-spacing: -.01em; }
+header.top .spacer { flex: 1; }
+.logo { width: 22px; height: 22px; color: var(--accent); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--surface);
+  padding: 7px 12px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.05); background: var(--accent); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--text); background: var(--surface-2); }
+.btn svg { width: 16px; height: 16px; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }
+
+/* Empty state */
+.drop {
+  padding: 48px 24px; text-align: center; border: 2px dashed var(--border); border-radius: 16px;
+  background: var(--surface); transition: border-color .15s, background .15s;
+}
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop h2 { margin: 12px 0 6px; font-size: 22px; letter-spacing: -.01em; }
+.drop p { margin: 0 auto; color: var(--muted); max-width: 560px; }
+.drop .actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+.drop .big-icon { width: 44px; height: 44px; color: var(--accent); }
+.drop .hint { margin-top: 18px; font-size: 13px; color: var(--muted); }
+code { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.alert { margin-top: 16px; padding: 10px 14px; border-radius: 10px; background: var(--accent-soft); color: var(--text); font-size: 14px; }
+.alert ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* Dataset tabs */
+.datasets { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 16px; scrollbar-width: thin; }
+.ds {
+  flex: none; text-align: left; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); cursor: pointer; max-width: 260px;
+}
+.ds[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ds b { display: block; font-size: 14px; }
+.ds span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Summary */
+.summary { padding: 20px; display: grid; gap: 18px; }
+.summary h2 { margin: 0; font-size: 24px; letter-spacing: -.02em; }
+.summary .sub { color: var(--muted); margin-top: 2px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.stat { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.stat .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 12px; color: var(--muted); }
+.next {
+  display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 10px;
+  background: var(--accent-soft);
+}
+.next .when { font-weight: 600; }
+.next .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); font-weight: 650; }
+
+/* Toolbar */
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 20px 0 12px; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; }
+.seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: 7px; cursor: pointer; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-weight: 550; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  border: 1px solid var(--border); background: var(--surface); padding: 4px 10px; border-radius: 999px;
+  cursor: pointer; font-size: 13px; color: var(--muted);
+}
+.chip[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+.toggle input { accent-color: var(--accent); margin: 0; }
+
+/* Month nav */
+.monthnav { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: thin; }
+.monthnav a {
+  flex: none; font-size: 13px; text-decoration: none; color: var(--text); padding: 4px 10px;
+  border-radius: 8px; background: var(--surface); border: 1px solid var(--border);
+}
+.monthnav a small { color: var(--muted); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.monthnav a.empty { color: var(--muted); }
+
+/* Month sections */
+section.month { margin-top: 18px; scroll-margin-top: 16px; }
+section.month > h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; font-size: 17px; }
+section.month > h3 small { font-weight: 400; color: var(--muted); font-size: 13px; }
+
+.days { overflow: hidden; }
+.day {
+  display: grid; grid-template-columns: 116px minmax(0, 1fr) minmax(0, 1.1fr); gap: 14px; align-items: center;
+  padding: 11px 16px; border-top: 1px solid var(--border);
+}
+.day:first-child { border-top: 0; }
+.day.past { opacity: .5; }
+.day.today { background: var(--accent-soft); }
+.day .d { font-weight: 600; font-variant-numeric: tabular-nums; }
+.day .d small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
+.win { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.win .t { font-weight: 550; }
+.win .cont { font-size: 12.5px; color: var(--muted); }
+.badge {
+  display: inline-block; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em;
+  padding: 1px 7px; border-radius: 999px; margin-left: 6px; vertical-align: 1px;
+}
+.badge.full { background: var(--full-soft); color: var(--full); }
+.badge.partial { background: var(--partial-soft); color: var(--partial); }
+.badge.now { background: var(--accent); color: #fff; }
+
+.bar { position: relative; height: 10px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.bar i { position: absolute; top: 0; bottom: 0; border-radius: 999px; }
+.bar i.full { background: var(--full); }
+.bar i.partial { background: var(--partial); }
+.bar-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+.nil { padding: 14px 16px; color: var(--muted); }
+
+/* Calendar */
+.cal { padding: 12px; }
+.cal .grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal .wd { font-size: 11.5px; color: var(--muted); text-align: center; padding: 2px 0 4px; font-weight: 600; }
+.cell {
+  min-height: 74px; border-radius: 8px; padding: 6px; background: var(--surface-2); font-size: 12px;
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+}
+.cell.blank { background: transparent; }
+.cell .n { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cell.fav.full { background: var(--full-soft); box-shadow: inset 0 0 0 1px var(--full); }
+.cell.fav.partial { background: var(--partial-soft); box-shadow: inset 0 0 0 1px var(--partial); }
+.cell .w { color: var(--text); line-height: 1.25; overflow-wrap: anywhere; }
+.cell.past { opacity: .45; }
+.cell.today .n { color: var(--accent); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+footer { margin-top: 40px; font-size: 12.5px; color: var(--muted); }
+footer a { color: inherit; }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day { grid-template-columns: 92px minmax(0, 1fr); }
+  .day .barcol { grid-column: 1 / -1; }
+  .cell { min-height: 54px; padding: 4px; }
+  .cell .w { display: none; }
+  .summary h2 { font-size: 20px; }
+}
+@media print {
+  header.top .btn, .toolbar, .monthnav, .datasets { display: none !important; }
+  body { background: #fff; }
+  .card { box-shadow: none; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<noscript><div class="wrap">This viewer needs JavaScript.</div></noscript>
+
+<!-- Non-personal sample data: generated by the skill for a fictional "Example" person. -->
+<script type="application/json" id="sample-data">{"person":"Example","input_nakshatram":"Uthiradam","input_city_name":"Chennai","starting_month_year":"September 2026","forward_looking_months":3,"months":[{"month":"September","year":2026,"favorable_days":[{"date":"September 4, 2026","prediction":"until 11:04 PM"},{"date":"September 7, 2026","prediction":"from 06:14 PM onwards"},{"date":"September 9, 2026","prediction":"from 03:14 PM onwards"},{"date":"September 11, 2026","prediction":"until 01:16 PM"},{"date":"September 14, 2026","prediction":"from 01:55 PM onwards"},{"date":"September 16, 2026","prediction":"from 05:22 PM onwards"},{"date":"September 18, 2026","prediction":"from 10:44 PM onwards"},{"date":"September 23, 2026","prediction":"until 09:09 AM"},{"date":"September 25, 2026","prediction":"until 11:22 AM"}]},{"month":"October","year":2026,"favorable_days":[{"date":"October 5, 2026","prediction":"until 11:09 PM"},{"date":"October 7, 2026","prediction":"Entire day"},{"date":"October 9, 2026","prediction":"from 09:19 PM onwards"},{"date":"October 12, 2026","prediction":"until 11:52 PM"},{"date":"October 14, 2026","prediction":"Entire day (favorable until October 15, 2026 04:03 AM)"},{"date":"October 16, 2026","prediction":"from 06:47 AM onwards"},{"date":"October 17, 2026","prediction":"from 09:47 AM onwards"},{"date":"October 19, 2026","prediction":"from 05:25 PM onwards"},{"date":"October 21, 2026","prediction":"from 07:47 PM onwards"},{"date":"October 23, 2026","prediction":"from 09:03 PM onwards"},{"date":"October 26, 2026","prediction":"from 05:41 PM onwards"},{"date":"October 28, 2026","prediction":"from 01:26 PM onwards"},{"date":"October 30, 2026","prediction":"from 09:04 AM onwards"}]},{"month":"November","year":2026,"favorable_days":[{"date":"November 4, 2026","prediction":"Entire day (favorable until November 5, 2026 03:30 AM)"},{"date":"November 6, 2026","prediction":"Entire day (favorable until November 7, 2026 04:43 AM)"},{"date":"November 9, 2026","prediction":"until 07:24 AM"},{"date":"November 11, 2026","prediction":"until 11:38 AM"},{"date":"November 13, 2026","prediction":"Entire day"},{"date":"November 14, 2026","prediction":"until 08:24 PM"},{"date":"November 16, 2026","prediction":"Entire day (favorable until November 17, 2026 02:16 AM)"},{"date":"November 18, 2026","prediction":"Entire day"},{"date":"November 20, 2026","prediction":"from 06:56 AM onwards"},{"date":"November 23, 2026","prediction":"Entire day (favorable until November 24, 2026 02:02 AM)"},{"date":"November 25, 2026","prediction":"until 08:36 PM"},{"date":"November 27, 2026","prediction":"until 03:08 PM"},{"date":"November 28, 2026","prediction":"from 12:50 PM onwards"}]}]}</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js" integrity="sha384-toVdrLSMaw7Y55MowcKqkmFL/Ek6Sky62NOk0b5sDDZBu2wcoPyyQUt9unDVjXhL" crossorigin="anonymous"></script>
+<script>
+"use strict";
+const { useState, useMemo, useRef, useEffect, useCallback } = React;
+const html = htm.bind(React.createElement);
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const WEEKDAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const DAY_MINUTES = 24 * 60;
+
+// ---------- Parsing the skill's consolidated JSON ----------
+
+// "September 4, 2026" -> local Date at midnight
+function parseDate(s) {
+  const m = /^([A-Za-z]+) (\d{1,2}), (\d{4})$/.exec(String(s).trim());
+  if (!m) return null;
+  const mi = MONTHS.indexOf(m[1]);
+  if (mi < 0) return null;
+  return new Date(Number(m[3]), mi, Number(m[2]));
+}
+
+// "10:34 AM" -> minutes since midnight
+function parseClock(s) {
+  const m = /^(\d{1,2}):(\d{2}) ?([AP]M)$/i.exec(String(s).trim());
+  if (!m) return null;
+  let h = Number(m[1]) % 12;
+  if (m[3].toUpperCase() === "PM") h += 12;
+  return h * 60 + Number(m[2]);
+}
+
+// The skill emits (see _build_favorable_entry in panchangam_utils.py):
+//   "Entire day" | "until T" | "from T onwards" | "from T to T",
+//   several windows joined by "; ", and an optional
+//   " (favorable until <Month D, YYYY> <T>)" suffix when a window runs past midnight.
+function parsePrediction(text) {
+  const windows = String(text).split("; ").map((raw) => {
+    let s = raw.trim(), continuation = null, m;
+    if ((m = /^(.*) \(favorable until (.+)\)$/.exec(s))) { s = m[1]; continuation = m[2]; }
+    if (/^entire day$/i.test(s)) return { kind: "entire", start: 0, end: DAY_MINUTES, label: "Entire day", continuation };
+    if ((m = /^until (.+)$/i.exec(s))) {
+      return { kind: "until", start: 0, end: parseClock(m[1]), label: `Until ${m[1]}`, continuation };
+    }
+    if ((m = /^from (.+) onwards$/i.exec(s))) {
+      return { kind: "from", start: parseClock(m[1]), end: DAY_MINUTES, label: `From ${m[1]}`, continuation };
+    }
+    if ((m = /^from (.+) to (.+)$/i.exec(s))) {
+      return { kind: "range", start: parseClock(m[1]), end: parseClock(m[2]), label: `${m[1]} – ${m[2]}`, continuation };
+    }
+    return { kind: "other", start: null, end: null, label: s, continuation };
+  });
+  const full = windows.some((w) => w.kind === "entire");
+  const minutes = windows.reduce((a, w) => a + (w.start != null && w.end != null ? Math.max(0, w.end - w.start) : 0), 0);
+  return { windows, full, minutes };
+}
+
+function formatContinuation(c) {
+  // "October 18, 2026 12:19 AM" -> "Oct 18, 12:19 AM"
+  const m = /^([A-Za-z]+) (\d{1,2}), \d{4} (.+)$/.exec(c);
+  return m ? `${m[1].slice(0, 3)} ${m[2]}, ${m[3]}` : c;
+}
+
+function validate(data) {
+  if (!data || typeof data !== "object") return "not a JSON object";
+  if (!Array.isArray(data.months)) return "missing a \"months\" list";
+  for (const mo of data.months) {
+    if (!mo || !Array.isArray(mo.favorable_days)) return "a month is missing \"favorable_days\"";
+    for (const d of mo.favorable_days) {
+      if (!d || typeof d.date !== "string" || typeof d.prediction !== "string") return "a day row is missing \"date\"/\"prediction\"";
+    }
+  }
+  return null;
+}
+
+function normalize(data, source) {
+  const months = data.months.map((mo) => {
+    const days = mo.favorable_days
+      .map((row) => {
+        const date = parseDate(row.date);
+        return date ? { raw: row, date, weekday: WEEKDAYS[date.getDay()], ...parsePrediction(row.prediction) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.date - b.date);
+    const monthIndex = MONTHS.indexOf(mo.month);
+    return { month: mo.month, year: mo.year, monthIndex, key: `${mo.year}-${String(monthIndex + 1).padStart(2, "0")}`, days };
+  });
+  const weekdays = [...new Set(months.flatMap((m) => m.days.map((d) => d.date.getDay())))].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+  return {
+    id: `${source}::${data.person}::${data.input_city_name}::${data.starting_month_year}::${data.forward_looking_months}`,
+    source,
+    person: data.person || "Unknown",
+    nakshatram: data.input_nakshatram || "—",
+    city: data.input_city_name || "—",
+    start: data.starting_month_year || (months[0] ? `${months[0].month} ${months[0].year}` : "—"),
+    span: data.forward_looking_months ?? months.length,
+    months,
+    weekdays,
+  };
+}
+
+async function readJsonFiles(fileList) {
+  const loaded = [], errors = [];
+  const files = [...fileList].filter((f) => /\.json$/i.test(f.name));
+  if (!files.length) errors.push("No .json files found in that selection.");
+  for (const f of files) {
+    const label = f.webkitRelativePath || f.name;
+    try {
+      const data = JSON.parse(await f.text());
+      const problem = validate(data);
+      if (problem) { if (files.length === 1) errors.push(`${label}: ${problem}.`); continue; }
+      loaded.push(normalize(data, label));
+    } catch (e) {
+      errors.push(`${label}: could not be read as JSON.`);
+    }
+  }
+  if (files.length > 1 && !loaded.length && !errors.length) errors.push("None of those .json files look like prediction results.");
+  return { loaded, errors };
+}
+
+// ---------- Small helpers ----------
+
+const startOfToday = () => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; };
+const sameDay = (a, b) => a.getTime() === b.getTime();
+const fmtShort = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const fmtLong = (d) => d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+function useTheme() {
+  const [theme, setTheme] = useState(() => { try { return localStorage.getItem("pv-theme") || "auto"; } catch { return "auto"; } });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", theme);
+    try { localStorage.setItem("pv-theme", theme); } catch {}
+  }, [theme]);
+  return [theme, setTheme];
+}
+
+const Icon = {
+  sun: html`<svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>`,
+  file: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>`,
+  folder: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`,
+  upload: html`<svg class="big-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>`,
+  print: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>`,
+};
+
+// ---------- Components ----------
+
+function Pickers({ onFiles, primary }) {
+  const fileRef = useRef(null), dirRef = useRef(null);
+  useEffect(() => { if (dirRef.current) dirRef.current.setAttribute("webkitdirectory", ""); }, []);
+  const pick = (ref) => () => ref.current && ref.current.click();
+  const change = (e) => { onFiles(e.target.files); e.target.value = ""; };
+  return html`
+    <input ref=${fileRef} type="file" accept=".json,application/json" multiple class="sr" onChange=${change} tabIndex="-1" aria-hidden="true" />
+    <input ref=${dirRef} type="file" multiple class="sr" onChange=${change} tabIndex="-1" aria-hidden="true" />
+    <button class=${"btn" + (primary ? " primary" : "")} onClick=${pick(fileRef)}>${Icon.file} Open JSON file${primary ? "(s)" : ""}</button>
+    <button class="btn" onClick=${pick(dirRef)}>${Icon.folder} Open output folder</button>
+  `;
+}
+
+function Empty({ onFiles, onSample, errors }) {
+  const [over, setOver] = useState(false);
+  return html`
+    <div
+      class=${"drop" + (over ? " over" : "")}
+      onDragOver=${(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave=${() => setOver(false)}
+      onDrop=${(e) => { e.preventDefault(); setOver(false); onFiles(e.dataTransfer.files); }}
+    >
+      ${Icon.upload}
+      <h2>View your favorable days and times</h2>
+      <p>Drop a prediction <code>.json</code> here, or open your whole output folder to load every person and city in it at once.</p>
+      <div class="actions">
+        <${Pickers} onFiles=${onFiles} primary=${true} />
+        <button class="btn ghost" onClick=${onSample}>Try a sample</button>
+      </div>
+      <p class="hint">
+        The skill writes results to <code>{person}_output_dir/{person}/{city}/{person}_{Month}_{Year}_{N}.json</code>
+        in the folder Claude was working in.<br/>Files are read in your browser only. Nothing is uploaded.
+      </p>
+    </div>
+    ${errors.length > 0 && html`<${Errors} errors=${errors} />`}
+  `;
+}
+
+function Errors({ errors }) {
+  return html`<div class="alert" role="alert"><b>Some files couldn't be loaded</b><ul>${errors.map((e) => html`<li key=${e}>${e}</li>`)}</ul></div>`;
+}
+
+function DayBar({ day }) {
+  const segs = day.windows.filter((w) => w.start != null && w.end != null && w.end > w.start);
+  return html`
+    <div>
+      <div class="bar" role="img" aria-label=${`Favorable: ${day.windows.map((w) => w.label).join(", ")}`}>
+        ${segs.map((w, i) => html`<i key=${i} class=${day.full ? "full" : "partial"} style=${{ left: `${(w.start / DAY_MINUTES) * 100}%`, width: `${((w.end - w.start) / DAY_MINUTES) * 100}%` }}></i>`)}
+      </div>
+      <div class="bar-axis" aria-hidden="true"><span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>12a</span></div>
+    </div>
+  `;
+}
+
+function DayRow({ day, today }) {
+  const isToday = sameDay(day.date, today);
+  const past = day.date < today;
+  const conts = day.windows.filter((w) => w.continuation);
+  return html`
+    <div class=${"day" + (past ? " past" : "") + (isToday ? " today" : "")}>
+      <div class="d">${fmtShort(day.date)}<small>${day.weekday}</small></div>
+      <div class="win">
+        <span class="t">
+          ${day.windows.map((w) => w.label).join(" · ")}
+          <span class=${"badge " + (day.full ? "full" : "partial")}>${day.full ? "Full day" : "Partial"}</span>
+          ${isToday && html`<span class="badge now">Today</span>`}
+        </span>
+        ${conts.map((w, i) => html`<span key=${i} class="cont">Continues until ${formatContinuation(w.continuation)}</span>`)}
+      </div>
+      <div class="barcol"><${DayBar} day=${day} /></div>
+    </div>
+  `;
+}
+
+function MonthList({ month, today }) {
+  return html`
+    <div class="card days">
+      ${month.days.length
+        ? month.days.map((d) => html`<${DayRow} key=${d.raw.date} day=${d} today=${today} />`)
+        : html`<div class="nil">No favorable days match.</div>`}
+    </div>
+  `;
+}
+
+function MonthCalendar({ month, today }) {
+  const byDate = new Map(month.days.map((d) => [d.date.getDate(), d]));
+  const first = new Date(month.year, month.monthIndex, 1);
+  const count = new Date(month.year, month.monthIndex + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7; // Monday-first grid
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(html`<div key=${"b" + i} class="cell blank"></div>`);
+  for (let n = 1; n <= count; n++) {
+    const date = new Date(month.year, month.monthIndex, n);
+    const d = byDate.get(n);
+    const cls = ["cell", d ? "fav " + (d.full ? "full" : "partial") : "", date < today ? "past" : "", sameDay(date, today) ? "today" : ""].join(" ");
+    cells.push(html`
+      <div key=${n} class=${cls} title=${d ? `${fmtLong(date)}: ${d.raw.prediction}` : undefined}>
+        <span class="n">${n}</span>
+        ${d && html`<span class="w">${d.full ? "Full day" : d.windows.map((w) => w.label).join(", ")}</span>`}
+      </div>`);
+  }
+  return html`
+    <div class="card cal">
+      <div class="grid">
+        ${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((w) => html`<div key=${w} class="wd">${w}</div>`)}
+        ${cells}
+      </div>
+    </div>
+  `;
+}
+
+function Viewer({ ds, today }) {
+  const [view, setView] = useState("list");
+  const [weekdayFilter, setWeekdayFilter] = useState(() => new Set());
+  const [fullOnly, setFullOnly] = useState(false);
+  const [hidePast, setHidePast] = useState(false);
+
+  useEffect(() => { setWeekdayFilter(new Set()); }, [ds.id]);
+
+  const allDays = useMemo(() => ds.months.flatMap((m) => m.days), [ds]);
+  const upcoming = allDays.filter((d) => d.date >= today);
+  const next = upcoming[0];
+  const nextFull = upcoming.find((d) => d.full);
+
+  const filtered = useMemo(() => ds.months.map((m) => ({
+    ...m,
+    days: m.days.filter((d) =>
+      (!weekdayFilter.size || weekdayFilter.has(d.date.getDay())) &&
+      (!fullOnly || d.full) &&
+      (!hidePast || d.date >= today)),
+  })), [ds, weekdayFilter, fullOnly, hidePast, today]);
+
+  const toggleWeekday = (w) => setWeekdayFilter((s) => { const n = new Set(s); n.has(w) ? n.delete(w) : n.add(w); return n; });
+  const hasPast = allDays.some((d) => d.date < today);
+
+  return html`
+    <div class="card summary">
+      <div>
+        <h2>${ds.person}</h2>
+        <div class="sub">${ds.nakshatram} nakshatram · ${ds.city} · ${ds.span} month${ds.span == 1 ? "" : "s"} from ${ds.start}</div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="v">${allDays.length}</div><div class="l">Favorable days</div></div>
+        <div class="stat"><div class="v">${allDays.filter((d) => d.full).length}</div><div class="l">Full days</div></div>
+        <div class="stat"><div class="v">${upcoming.length}</div><div class="l">Still ahead</div></div>
+        <div class="stat"><div class="v">${ds.weekdays.map((w) => WEEKDAYS[w].slice(0, 3)).join(" ") || "—"}</div><div class="l">Weekdays</div></div>
+      </div>
+      ${next && html`
+        <div class="next">
+          <div>
+            <div class="lbl">${sameDay(next.date, today) ? "Today" : "Next favorable"}</div>
+            <div class="when">${fmtLong(next.date)} · ${next.windows.map((w) => w.label).join(", ")}</div>
+            ${nextFull && nextFull !== next && html`<div class="sub">Next full day: ${fmtLong(nextFull.date)}</div>`}
+          </div>
+        </div>`}
+    </div>
+
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="View">
+        <button aria-pressed=${view === "list"} onClick=${() => setView("list")}>List</button>
+        <button aria-pressed=${view === "calendar"} onClick=${() => setView("calendar")}>Calendar</button>
+      </div>
+      <div class="chips" role="group" aria-label="Filter by weekday">
+        ${ds.weekdays.map((w) => html`<button key=${w} class="chip" aria-pressed=${weekdayFilter.has(w)} onClick=${() => toggleWeekday(w)}>${WEEKDAYS[w].slice(0, 3)}</button>`)}
+      </div>
+      <label class="toggle"><input type="checkbox" checked=${fullOnly} onChange=${(e) => setFullOnly(e.target.checked)} /> Full days only</label>
+      ${hasPast && html`<label class="toggle"><input type="checkbox" checked=${hidePast} onChange=${(e) => setHidePast(e.target.checked)} /> Hide past</label>`}
+    </div>
+
+    <nav class="monthnav" aria-label="Months">
+      ${filtered.map((m) => html`<a key=${m.key} href=${"#m-" + m.key} class=${m.days.length ? "" : "empty"}>${m.month.slice(0, 3)} ${m.year}<small>${m.days.length}</small></a>`)}
+    </nav>
+
+    ${filtered.map((m) => html`
+      <section key=${m.key} class="month" id=${"m-" + m.key}>
+        <h3>${m.month} ${m.year} <small>${m.days.length} favorable day${m.days.length === 1 ? "" : "s"}</small></h3>
+        ${view === "list" ? html`<${MonthList} month=${m} today=${today} />` : html`<${MonthCalendar} month=${m} today=${today} />`}
+      </section>`)}
+
+    ${view === "calendar" && html`
+      <div class="legend">
+        <span><i style=${{ background: "var(--full-soft)", boxShadow: "inset 0 0 0 1px var(--full)" }}></i> Favorable all day</span>
+        <span><i style=${{ background: "var(--partial-soft)", boxShadow: "inset 0 0 0 1px var(--partial)" }}></i> Favorable part of the day</span>
+      </div>`}
+  `;
+}
+
+function App() {
+  const [datasets, setDatasets] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [errors, setErrors] = useState([]);
+  const [theme, setTheme] = useTheme();
+  const today = useMemo(startOfToday, []);
+
+  const add = useCallback((loaded) => {
+    if (!loaded.length) return;
+    setDatasets((cur) => {
+      const map = new Map(cur.map((d) => [d.id, d]));
+      loaded.forEach((d) => map.set(d.id, d));
+      return [...map.values()];
+    });
+    setActiveId(loaded[0].id);
+  }, []);
+
+  const onFiles = useCallback(async (files) => {
+    const { loaded, errors } = await readJsonFiles(files);
+    setErrors(errors);
+    add(loaded);
+  }, [add]);
+
+  const onSample = useCallback(() => {
+    const data = JSON.parse(document.getElementById("sample-data").textContent);
+    setErrors([]);
+    add([normalize(data, "sample")]);
+  }, [add]);
+
+  // Allow dropping more files anywhere once something is loaded.
+  useEffect(() => {
+    if (!datasets.length) return;
+    const over = (e) => e.preventDefault();
+    const drop = (e) => { e.preventDefault(); if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files); };
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => { window.removeEventListener("dragover", over); window.removeEventListener("drop", drop); };
+  }, [datasets.length, onFiles]);
+
+  const active = datasets.find((d) => d.id === activeId) || datasets[0];
+  const nextTheme = { auto: "light", light: "dark", dark: "auto" }[theme];
+
+  return html`
+    <div class="wrap">
+      <header class="top">
+        <h1>${Icon.sun} Panchangam Viewer</h1>
+        <span class="spacer"></span>
+        ${datasets.length > 0 && html`
+          <${Pickers} onFiles=${onFiles} />
+          <button class="btn ghost" onClick=${() => window.print()} title="Print">${Icon.print}<span class="sr">Print</span></button>`}
+        <button class="btn ghost" onClick=${() => setTheme(nextTheme)} title="Switch theme">Theme: ${theme}</button>
+      </header>
+
+      ${!active
+        ? html`<${Empty} onFiles=${onFiles} onSample=${onSample} errors=${errors} />`
+        : html`
+          ${errors.length > 0 && html`<${Errors} errors=${errors} />`}
+          ${datasets.length > 1 && html`
+            <div class="datasets" role="tablist" aria-label="Loaded predictions">
+              ${datasets.map((d) => html`
+                <button key=${d.id} role="tab" class="ds" aria-selected=${d.id === active.id} onClick=${() => setActiveId(d.id)} title=${d.source}>
+                  <b>${d.person}</b><span>${d.city} · ${d.start} · ${d.span} mo</span>
+                </button>`)}
+            </div>`}
+          <${Viewer} key=${active.id} ds=${active} today=${today} />`}
+
+      <footer>
+        Times are local to the prediction's city, as published by drikpanchang.com. This is a calculation aid, not astrological advice.
+        · <a href="https://github.com/sreenaathkv/predicting-favorable-time-per-panchangam">Source on GitHub</a>
+      </footer>
+    </div>
+  `;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(html`<${App} />`);
+</script>
+</body>
+</html>
