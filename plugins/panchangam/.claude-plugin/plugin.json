@@ -1,0 +1,12 @@
+{
+  "name": "panchangam",
+  "version": "1.0.0",
+  "description": "Predict favorable days and time windows from a person's birth Nakshatram, favorable weekdays and city, using drikpanchang.com daily Panchangam data.",
+  "author": {
+    "name": "Sreenaath",
+    "url": "https://github.com/sreenaathkv"
+  },
+  "homepage": "https://github.com/sreenaathkv/predicting-favorable-time-per-panchangam",
+  "repository": "https://github.com/sreenaathkv/predicting-favorable-time-per-panchangam",
+  "keywords": ["panchangam", "nakshatram", "muhurtham", "astrology", "tamil"]
+}

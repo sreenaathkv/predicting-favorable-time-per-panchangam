@@ -1,0 +1,19 @@
+{
+  "name": "panchangam-skills",
+  "owner": {
+    "name": "Sreenaath",
+    "url": "https://github.com/sreenaathkv"
+  },
+  "metadata": {
+    "description": "Claude Code skills for Panchangam-based favorable day/time prediction."
+  },
+  "plugins": [
+    {
+      "name": "panchangam",
+      "source": "./plugins/panchangam",
+      "description": "Predict favorable days and time windows from a person's birth Nakshatram, favorable weekdays and city, using drikpanchang.com daily Panchangam data.",
+      "category": "productivity",
+      "keywords": ["panchangam", "nakshatram", "muhurtham", "astrology", "tamil"]
+    }
+  ]
+}

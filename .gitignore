@@ -1,0 +1,13 @@
+# Local Python state
+.venv/
+__pycache__/
+*.pyc
+
+# Scraped drikpanchang pages (local cache, regenerated on demand)
+panchang_cache/
+
+# Per-person prediction results -- personal data, never commit
+*_output_dir/
+output_results/
+
+.DS_Store

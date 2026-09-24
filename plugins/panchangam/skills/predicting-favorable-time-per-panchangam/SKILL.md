@@ -29,14 +29,22 @@ e) For example, if the person name is missing, request the user to provide one.
 **Step 1: Sanitization** - First confirm if all the details from the user required for this skill, as mentioned in the Input Format section are available. If not, prompt and get additional details.
 
 **Step 2: Tool call** - Execute the function fetch_favorable_month_days() in scripts/panchangam_utils.py by passing on the Input parameters. 
-Following is an example invocation
+Following is an example invocation. Set `SKILL_DIR` to this skill's base directory (the folder containing this SKILL.md). Do **not** `cd` into the skill directory: run from the user's current working directory so the results land there, and keep the virtualenv and page cache under `~/.cache/` so they survive plugin updates and never get written into the installed skill folder.
 
 ```bash
-cd scripts && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && python3 panchangam_utils.py Monday Wednesday Friday Saturday Uthiradam Chennai "September 2026" Jai --forward-looking-months 6
+SKILL_DIR="<base directory of this skill>"
+STATE_DIR="$HOME/.cache/predicting-favorable-time-per-panchangam"
+[ -x "$STATE_DIR/venv/bin/python3" ] || python3 -m venv "$STATE_DIR/venv"
+"$STATE_DIR/venv/bin/pip" install -q -r "$SKILL_DIR/scripts/requirements.txt"
+"$STATE_DIR/venv/bin/python3" "$SKILL_DIR/scripts/panchangam_utils.py" \
+  Monday Wednesday Friday Saturday Uthiradam Chennai "September 2026" Jai \
+  --forward-looking-months 6 --cache-dir "$STATE_DIR/panchang_cache"
 ```
 
+Pass `--output-dir <dir>` only if the user asked for a specific output location.
+
 **Step 3 : Report to user** - 
-a) The above step (Step 2) runs through complex calculation by finding intersection of favorable days of the week AND favorable nakshatrams relative to birth nakshatram AND favorable yogam (Siddha or Amrutha Tamil yogam). When combination of all three of them exists for a given day, that narrow window of time becomes a favorable time for that person. The above step should produce the results for the person under a per-person, per-city subfolder `{person}/{city}/` of either the user provided 'output_dir' argument or the '{person}_output_dir' directory relative to the current directory of execution (e.g. `Sai_output_dir/Sai/Chennai/`). Keeping each city in its own subfolder means running the same person for a second city does not overwrite the first city's results.
+a) The above step (Step 2) runs through complex calculation by finding intersection of favorable days of the week AND favorable nakshatrams relative to birth nakshatram AND favorable yogam (Siddha or Amrutha Tamil yogam). When combination of all three of them exists for a given day, that narrow window of time becomes a favorable time for that person. The above step should produce the results for the person under a per-person, per-city subfolder `{person}/{city}/` of either the user provided 'output_dir' argument or the '{person}_output_dir' directory relative to the user's current working directory (e.g. `Sai_output_dir/Sai/Chennai/`). Keeping each city in its own subfolder means running the same person for a second city does not overwrite the first city's results.
 
 b) Once, for each month, the prediction .txt files are created, the script automatically collates them across months and will create a JSON file with consolidated view in the same per-person, per-city folder (`{output_dir}/{person}/{city}/`) with the following naming convention {person}_{starting_month_year}_{forward_looking_months}.json.
 
