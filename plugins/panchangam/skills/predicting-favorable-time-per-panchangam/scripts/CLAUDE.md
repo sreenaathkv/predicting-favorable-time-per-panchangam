@@ -78,3 +78,16 @@ Every `fetch_favorable_month_days(...)` call in the test suite passes both `pers
 CLI coverage is split three ways: `TestArgParser` tests `_build_arg_parser()` directly (pure argparse wiring, no I/O); `TestMainFunction` calls `pu.main(argv)` in-process (capturing stdout via `contextlib.redirect_stdout`) against the real on-disk `panchang_cache/` (which already has Chennai's January 2026 fully cached from earlier development, so these run offline — `main()` has no `session` param to inject a fake one, unlike `fetch_favorable_month_days` itself); `TestCliSubprocess` actually shells out via `subprocess.run([sys.executable, str(script_path), ...])` for a handful of true end-to-end checks (help text, success path, error exit code), also relying on that same real cache to avoid live requests. `TestFetchFavorableMonthDaysDirectInvocation` is a dedicated (if largely redundant with the rest of the suite) test emphasizing the "import and call directly from another script" usage path specifically.
 
 When adding new nakshatra-derived utilities, build on `resolve_nakshatra_index`/`next_27_nakshatras` for ordering/rotation rather than re-deriving indices, and accept input in any of Tamil/Sanskrit/English via the existing `_LOOKUP` mechanism.
+
+## Group / couple favorable times (`find_common_favorable_times`)
+
+`find_common_favorable_times(people, starting_month_year, forward_looking_months=3, *, group_name=None, output_dir=None, ...)`
+(CLI: `panchangam_utils.py group --person 'NAME;NAKSHATRAM;CITY;WEEKDAY,...' --person ... "Month Year"`)
+finds moments favorable for **every** person at once, where people may live in different cities or time zones:
+
+- Each person is evaluated exactly like `fetch_favorable_month_days`, in their **own** city: only their own favorable weekdays (by local date), `_favorable_windows` against *their* favorable-nakshatram set, and yogam as published for their city. `_favorable_intervals` is the machine form of `_build_favorable_entry`: minute offsets from local midnight, with a window that runs to midnight extended past 1440 to the "(favorable until …)" next-day cutoff.
+- Intervals are converted to UTC with `_local_minutes_to_utc`. The time zone comes from geonamescache's `timezone` field via `_city_timezone`, and wall-clock times are localised with `zoneinfo`, so DST is handled. Each person's intervals are `_merge_intervals`'d, then all people are `_intersect_intervals`'d. Nakshatram transitions are the same instant worldwide, so any overlap is automatically in a nakshatram favorable to all.
+- Dates are scanned one day past each end of the window, so overlaps straddling the window edge across time zones aren't lost. An overlap is kept if it starts inside the window on *any* member's local calendar, and is bucketed by the first member's local start month.
+- Output: `{output_dir}/{A}_{B}/{A}_{B}_{starting_month_year}_{N}.json` + `.txt`, with `output_dir` defaulting to `{A}_{B}_output_dir`. The JSON holds `participants` (with `timezone`), `common_favorable_nakshatrams`, and `months[].common_windows[]` of `{start_utc, end_utc, duration_minutes, local_times[{person, input_city_name, timezone, start, end}]}`.
+
+Tests: `TestGroupIntervalHelpers`, `TestFindCommonFavorableTimes` (offline, over the Sunnyvale September 2026 fixtures) and `TestGroupCli`.

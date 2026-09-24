@@ -8,8 +8,9 @@ import re
 import sys
 import time
 import warnings
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import geonamescache
 import requests
@@ -975,6 +976,276 @@ def fetch_favorable_month_days(
 
 
 # ---------------------------------------------------------------------------
+# Joint favorable times for a group of people (e.g. a couple), possibly in
+# different cities/time zones.
+# ---------------------------------------------------------------------------
+
+
+def _favorable_intervals(day_result, favorable_indices):
+    """Favorable windows for one day, as (start, end) minute offsets from that date's local midnight.
+
+    The same windows _build_favorable_entry renders as text, in machine-usable
+    form: a window that runs up to midnight and whose nakshatram/yogam state
+    is known to hold into the next calendar day (the "(favorable until ...)"
+    suffix -- see _next_day_continuation_label) is extended past 1440 to that
+    next-day cutoff.
+    """
+    windows = _favorable_windows(day_result, favorable_indices)
+    known_cutoffs = [
+        c
+        for c in (
+            day_result["_nakshatram_next_day_continuation"],
+            day_result["_tam_yogam_next_day_continuation"],
+        )
+        if c is not None
+    ]
+    if windows and windows[-1][1] == _MINUTES_PER_DAY and known_cutoffs:
+        next_day_minutes = min(_cutoff_to_minutes(c) for c in known_cutoffs)
+        windows[-1] = (windows[-1][0], _MINUTES_PER_DAY + next_day_minutes)
+    return windows
+
+
+def _city_timezone(geoname_id):
+    """Return the ZoneInfo for a resolved geoname-id (drikpanchang times are local wall-clock times there)."""
+    city = _GEONAMES_CACHE.get_cities().get(str(geoname_id))
+    tz_name = city.get("timezone") if city else None
+    if not tz_name:
+        raise ValueError(f"No time zone known for geoname-id {geoname_id}")
+    return ZoneInfo(tz_name)
+
+
+def _local_minutes_to_utc(day_date, minutes, tz):
+    """Convert "`minutes` past local midnight of `day_date`" (may exceed 1440) in `tz` to an aware UTC datetime."""
+    local_wall_clock = datetime.combine(day_date, datetime.min.time()) + timedelta(minutes=minutes)
+    return local_wall_clock.replace(tzinfo=tz).astimezone(timezone.utc)
+
+
+def _merge_intervals(intervals):
+    """Sort and merge overlapping/touching (start, end) intervals."""
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _intersect_intervals(a, b):
+    """Intersect two sorted, merged lists of (start, end) intervals."""
+    result = []
+    i = j = 0
+    while i < len(a) and j < len(b):
+        start = max(a[i][0], b[j][0])
+        end = min(a[i][1], b[j][1])
+        if start < end:
+            result.append((start, end))
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return result
+
+
+def _dates_between_for_weekdays(first_date, last_date, weekday_names):
+    wanted = {_WEEKDAY_NAMES.index(name) for name in weekday_names}
+    day_date = first_date
+    while day_date <= last_date:
+        if day_date.weekday() in wanted:
+            yield day_date
+        day_date += timedelta(days=1)
+
+
+def _format_local_datetime(dt):
+    return f"{calendar.day_name[dt.weekday()]}, {_format_day_label(dt.date())} {_minutes_to_cutoff(dt.hour * 60 + dt.minute)}"
+
+
+def _normalize_group_member(member):
+    required = ("person", "input_nakshatram", "input_city_name", "fav_days_of_week")
+    missing = [key for key in required if not member.get(key)]
+    if missing:
+        raise ValueError(f"group member {member!r} is missing: {', '.join(missing)}")
+    if not isinstance(member["person"], str) or not member["person"].strip():
+        raise ValueError("each group member's person must be a non-empty string")
+    return {
+        "person": member["person"].strip(),
+        "input_nakshatram": member["input_nakshatram"],
+        "input_city_name": member["input_city_name"],
+        "fav_days_of_week": [_normalize_weekday_name(day) for day in member["fav_days_of_week"]],
+    }
+
+
+def _format_group_file_contents(consolidated):
+    lines = [f"Common favorable times for {consolidated['group']}"]
+    for member in consolidated["participants"]:
+        lines.append(
+            f"  {member['person']}: {member['input_nakshatram']} nakshatram, {member['input_city_name']} "
+            f"({member['timezone']}), favorable weekdays {', '.join(member['fav_days_of_week'])}"
+        )
+    lines.append(
+        f"Window: {consolidated['forward_looking_months']} month(s) from {consolidated['starting_month_year']}"
+    )
+    lines.append("=" * 60)
+    for month in consolidated["months"]:
+        lines.append(f"{month['month']} {month['year']}:")
+        if not month["common_windows"]:
+            lines.append("  No common favorable time found.")
+        for window in month["common_windows"]:
+            lines.append(f"  {window['duration_minutes'] // 60}h {window['duration_minutes'] % 60:02d}m together:")
+            for local in window["local_times"]:
+                lines.append(f"    {local['person']} ({local['input_city_name']}): {local['start']} -> {local['end']}")
+    return "\n".join(lines) + "\n"
+
+
+def find_common_favorable_times(
+    people,
+    starting_month_year,
+    forward_looking_months=3,
+    *,
+    group_name=None,
+    output_dir=None,
+    use_cache=True,
+    cache_dir=None,
+    request_delay_seconds=_DEFAULT_REQUEST_DELAY_SECONDS,
+    session=None,
+    city_chooser=None,
+    interactive=True,
+):
+    """Find time windows that are favorable for every person in `people` at the same moment.
+
+    `people` is a list of 2+ dicts, each with "person", "input_nakshatram",
+    "input_city_name" and "fav_days_of_week" -- the same inputs
+    fetch_favorable_month_days takes for one person. People may live in
+    different cities and time zones.
+
+    Each person is evaluated independently in their *own* city, exactly as
+    fetch_favorable_month_days would: only on their own favorable weekdays
+    (by their local date), with the nakshatram favorable relative to *their*
+    birth nakshatram and a Siddha/Amrutha Tamil Yogam as published for
+    *their* city. Every person's favorable windows are then placed on one
+    absolute (UTC) timeline and intersected. Because a nakshatram transition
+    happens at the same instant everywhere, any moment inside every person's
+    window is automatically in a nakshatram favorable to all of them; the
+    weekday and yogam are each person's local ones. So e.g. a favorable
+    Wednesday night in Chennai can overlap a favorable Wednesday morning in
+    Sunnyvale.
+
+    Each person's dates are scanned one day beyond each end of the window,
+    so an overlap straddling a month/window boundary across time zones isn't
+    lost; an overlap is kept if it starts inside the window on at least one
+    person's local calendar, and is filed under the month of its start on
+    the first person's local calendar.
+
+    Writes `{output_dir}/{group slug}/{group slug}_{starting_month_year}_{N}.json`
+    and a matching `.txt`, where `group slug` joins the slugified person
+    names with "_" and `output_dir` defaults to `f"{group slug}_output_dir"`.
+    Returns the consolidated dict (also what's written to the JSON), with an
+    added "output_file" key.
+    """
+    if not isinstance(people, (list, tuple)) or len(people) < 2:
+        raise ValueError("people must list at least two group members")
+    members = [_normalize_group_member(member) for member in people]
+    group_slug = "_".join(_slugify_person_name(member["person"]) for member in members)
+    if group_name is None:
+        group_name = " & ".join(member["person"] for member in members)
+    if output_dir is None:
+        output_dir = f"{group_slug}_output_dir"
+    for member in members:
+        _slugify_city_name(member["input_city_name"])  # fail fast, before any network requests
+
+    start_year, start_month = _parse_month_year(starting_month_year)
+    months = list(_forward_looking_months(start_year, start_month, forward_looking_months))
+    window_first = date(months[0][0], months[0][1], 1)
+    last_year, last_month = months[-1]
+    window_last = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
+
+    common = None
+    for member in members:
+        favorable_indices = favorable_nakshatram_indices(member["input_nakshatram"])
+        geoname_id = resolve_geoname_id(member["input_city_name"], chooser=city_chooser, interactive=interactive)
+        tz = _city_timezone(geoname_id)
+        member["_tz"] = tz
+        member["timezone"] = tz.key
+
+        intervals = []
+        for day_date in _dates_between_for_weekdays(
+            window_first - timedelta(days=1), window_last + timedelta(days=1), member["fav_days_of_week"]
+        ):
+            html = _fetch_day_panchang_html(
+                geoname_id,
+                day_date,
+                use_cache=use_cache,
+                cache_dir=cache_dir,
+                request_delay_seconds=request_delay_seconds,
+                session=session,
+            )
+            day_result = _parse_day_panchang(html, day_date)
+            for start, end in _favorable_intervals(day_result, favorable_indices):
+                intervals.append((_local_minutes_to_utc(day_date, start, tz), _local_minutes_to_utc(day_date, end, tz)))
+        intervals = _merge_intervals(intervals)
+        common = intervals if common is None else _intersect_intervals(common, intervals)
+
+    common_indices = set.intersection(*(set(favorable_nakshatram_indices(m["input_nakshatram"])) for m in members))
+    month_buckets = {(year, month): [] for year, month in months}
+    for start_utc, end_utc in common:
+        local_starts = [start_utc.astimezone(member["_tz"]) for member in members]
+        if not any(window_first <= local.date() <= window_last for local in local_starts):
+            continue
+        anchor = local_starts[0]
+        bucket_key = (anchor.year, anchor.month)
+        if bucket_key not in month_buckets:
+            # Starts inside the window only on another member's calendar: file it
+            # under the nearest in-window month on the first member's calendar.
+            bucket_key = months[0] if anchor.date() < window_first else months[-1]
+        month_buckets[bucket_key].append(
+            {
+                "start_utc": start_utc.isoformat(),
+                "end_utc": end_utc.isoformat(),
+                "duration_minutes": int((end_utc - start_utc).total_seconds() // 60),
+                "local_times": [
+                    {
+                        "person": member["person"],
+                        "input_city_name": member["input_city_name"],
+                        "timezone": member["timezone"],
+                        "start": _format_local_datetime(start_utc.astimezone(member["_tz"])),
+                        "end": _format_local_datetime(end_utc.astimezone(member["_tz"])),
+                    }
+                    for member in members
+                ],
+            }
+        )
+
+    consolidated = {
+        "group": group_name,
+        "starting_month_year": starting_month_year,
+        "forward_looking_months": forward_looking_months,
+        "participants": [
+            {key: member[key] for key in ("person", "input_nakshatram", "input_city_name", "timezone", "fav_days_of_week")}
+            for member in members
+        ],
+        "common_favorable_nakshatrams": [NAKSHATRAS[i]["Tamil"] for i in sorted(common_indices)],
+        "months": [
+            {"month": calendar.month_name[month], "year": year, "common_windows": month_buckets[(year, month)]}
+            for year, month in months
+        ],
+    }
+
+    group_dir = Path(output_dir) / group_slug
+    group_dir.mkdir(parents=True, exist_ok=True)
+    stem = (
+        f"{group_slug}_"
+        f"{_slugify_for_filename(starting_month_year, label='starting_month_year')}_"
+        f"{forward_looking_months}"
+    )
+    json_path = group_dir / f"{stem}.json"
+    json_path.write_text(json.dumps(consolidated, indent=2, ensure_ascii=False), encoding="utf-8")
+    (group_dir / f"{stem}.txt").write_text(_format_group_file_contents(consolidated), encoding="utf-8")
+
+    consolidated["output_file"] = str(json_path)
+    return consolidated
+
+
+# ---------------------------------------------------------------------------
 # Command-line interface: `python3 panchangam_utils.py ...`
 # ---------------------------------------------------------------------------
 
@@ -1041,8 +1312,100 @@ def _build_arg_parser():
     return parser
 
 
+def _parse_group_member_spec(spec):
+    """Parse a --person value "NAME;NAKSHATRAM;CITY;WEEKDAY,WEEKDAY,..." into a group-member dict.
+
+    ";" separates the fields because city names themselves contain commas
+    (e.g. "Sunnyvale, CA"); weekdays may be separated by commas and/or spaces.
+    """
+    parts = [part.strip() for part in spec.split(";")]
+    if len(parts) != 4 or not all(parts):
+        raise argparse.ArgumentTypeError(
+            f"expected 'NAME;NAKSHATRAM;CITY;WEEKDAY,WEEKDAY,...', got {spec!r}"
+        )
+    person, nakshatram, city, weekdays = parts
+    return {
+        "person": person,
+        "input_nakshatram": nakshatram,
+        "input_city_name": city,
+        "fav_days_of_week": [day for day in re.split(r"[,\s]+", weekdays) if day],
+    }
+
+
+def _build_group_arg_parser():
+    parser = argparse.ArgumentParser(
+        prog="panchangam_utils.py group",
+        description=(
+            "Find time windows favorable for every person at once (e.g. a couple), each evaluated "
+            "in their own city and time zone, then intersected on a common timeline."
+        ),
+    )
+    parser.add_argument(
+        "--person",
+        dest="people",
+        action="append",
+        required=True,
+        type=_parse_group_member_spec,
+        metavar="'NAME;NAKSHATRAM;CITY;WEEKDAY,...'",
+        help="One group member; repeat for each (at least two). "
+        "E.g. --person 'Jai;Uthiradam;Chennai;Monday,Wednesday'.",
+    )
+    parser.add_argument("starting_month_year", help='Starting month and year, e.g. "September 2026".')
+    parser.add_argument(
+        "--forward-looking-months",
+        type=int,
+        default=3,
+        help="Number of months to look ahead, starting at starting_month_year (default: 3).",
+    )
+    parser.add_argument("--group-name", default=None, help='Display name (default: "A & B").')
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help='Directory to write results to (default: "{A}_{B}_output_dir", relative to the current directory).',
+    )
+    parser.add_argument("--cache-dir", default=None, help="Directory to cache fetched drikpanchang pages in.")
+    parser.add_argument("--no-cache", dest="use_cache", action="store_false", default=True)
+    parser.add_argument("--request-delay-seconds", type=float, default=_DEFAULT_REQUEST_DELAY_SECONDS)
+    parser.add_argument("--non-interactive", dest="interactive", action="store_false", default=True)
+    return parser
+
+
+def _group_main(argv):
+    args = _build_group_arg_parser().parse_args(argv)
+    try:
+        result = find_common_favorable_times(
+            args.people,
+            args.starting_month_year,
+            args.forward_looking_months,
+            group_name=args.group_name,
+            output_dir=args.output_dir,
+            use_cache=args.use_cache,
+            cache_dir=args.cache_dir,
+            request_delay_seconds=args.request_delay_seconds,
+            interactive=args.interactive,
+        )
+    except (ValueError, DrikPanchangBlockedError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Common favorable nakshatrams: {', '.join(result['common_favorable_nakshatrams']) or 'none'}")
+    for month in result["months"]:
+        print(f"{month['month']} {month['year']}:")
+        if not month["common_windows"]:
+            print("  No common favorable time found.")
+        for window in month["common_windows"]:
+            print(f"  {window['duration_minutes'] // 60}h {window['duration_minutes'] % 60:02d}m together:")
+            for local in window["local_times"]:
+                print(f"    {local['person']} ({local['input_city_name']}): {local['start']} -> {local['end']}")
+    print(f"Consolidated summary saved to {result['output_file']}")
+    return 0
+
+
 def main(argv=None):
     """CLI entry point: `python3 panchangam_utils.py WEEKDAY [WEEKDAY ...] NAKSHATRAM CITY MONTH_YEAR PERSON [options]`.
+
+    `python3 panchangam_utils.py group --person ... --person ... MONTH_YEAR [options]`
+    instead runs find_common_favorable_times for a group (see _build_group_arg_parser).
 
     Wires argparse straight onto fetch_favorable_month_days's parameters,
     prints a per-month summary of favorable days to stdout, and reports
@@ -1052,6 +1415,11 @@ def main(argv=None):
     error message instead of a raw traceback for expected failure modes
     (bad input, an unresolvable/ambiguous city, or drikpanchang rate-limiting).
     """
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "group":
+        return _group_main(argv[1:])
+
     args = _build_arg_parser().parse_args(argv)
 
     try:

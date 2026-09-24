@@ -1,6 +1,6 @@
 ---
 name: predicting-favorable-time-per-panchangam
-description: A comprehensive way to generate and predict favorable days and times for a given person. Use this when users want to find out a good day, time for any possible activity or even to find it out of curiosity.
+description: A comprehensive way to generate and predict favorable days and times for a given person, or for two or more people together (e.g. a couple), even when they live in different cities or time zones. Use this when users want to find out a good day, time for any possible activity or even to find it out of curiosity.
 ---
 
 # Predict Favorable Time per Panchangam
@@ -50,6 +50,33 @@ b) Once, for each month, the prediction .txt files are created, the script autom
 
 c) Once the consolidated view is generated in {person}_{starting_month_year}_{forward_looking_months}.json file, please display the same to  user in a nice tabular form, across months, for all the projected months and years (refer to assets/output_template.md).
 
+# Favorable time for more than one person (couple / group)
+Use this when the user asks for a good day/time that works for two or more people together (a couple, family, business partners, ...).
+
+**Inputs** - Collect the full set of Input Format details (name, birth nakshatram, favorable weekdays, city) for *every* person, plus one shared Starting Month Year and Prediction Months. Each person keeps their own city; the people may live in different cities/time zones.
+
+**Logic** - A moment is favorable for the group only when it is favorable for *every* person at that same instant:
+1. **Favorable weekday** -- the moment falls on one of that person's favorable weekdays, by *their own* local calendar.
+2. **Favorable nakshatram for all** -- the running nakshatram is favorable relative to *each* person's birth nakshatram, i.e. it is in the intersection of everyone's favorable-nakshatram sets. (Nakshatram transitions happen at the same instant worldwide, so this is one shared check.)
+3. **Siddha or Amrutha Tamil Yogam** -- during that common favorable nakshatram, the Tamil Yogam is Siddha or Amrutha (not Marana), as published for *each* person's own city.
+
+The script evaluates each person independently in their own city and time zone, exactly as the single-person flow does, puts every person's favorable windows on one absolute (UTC) timeline, and keeps only the overlap. Because of the time difference, a common window can fall on different local dates and weekdays for each person. For example, a favorable Wednesday night in Chennai (IST) can line up with a favorable Wednesday morning in Sunnyvale (Pacific time), which is 12h30m or 13h30m behind depending on US daylight saving time. Always report each window in **every person's local time**.
+
+If a person already has individual results for the same city and months, you do not need to re-run the single-person flow for them. The group run re-reads their cached drikpanchang pages rather than fetching them again. It also scans one extra day on each side of the window, so an overlap that straddles a month boundary across time zones isn't lost; those edge days may need a fetch or two.
+
+**Tool call** - same environment as Step 2, with the `group` subcommand. Give one `--person 'NAME;NAKSHATRAM;CITY;WEEKDAY,WEEKDAY,...'` per person (`;` separates the fields because city names contain commas):
+
+```bash
+"$STATE_DIR/venv/bin/python3" "$SKILL_DIR/scripts/panchangam_utils.py" group \
+  --person "Jai;Uthiradam;Sunnyvale, CA;Monday,Wednesday,Friday,Saturday" \
+  --person "Sai;Poosam;Chennai, India;Tuesday,Wednesday,Thursday,Saturday" \
+  "September 2026" --forward-looking-months 3 --cache-dir "$STATE_DIR/panchang_cache"
+```
+
+(or call `find_common_favorable_times(people, starting_month_year, forward_looking_months)` directly). Output goes to `{output_dir}/{A}_{B}/{A}_{B}_{starting_month_year}_{forward_looking_months}.json` plus a matching `.txt`, where `output_dir` defaults to `{A}_{B}_output_dir`. The JSON lists the participants with their time zones, the `common_favorable_nakshatrams`, and per month the `common_windows`, each with `start_utc`/`end_utc`, `duration_minutes`, and `local_times` for every person.
+
+**Report** - Show each person's individual table first (per assets/output_template.md), then the joint table from the "Group (couple) template" section of assets/output_template.md. If the persons have no common favorable weekday on any calendar, or the window yields no overlap, say so plainly and suggest a longer window.
+
 # Output Files
 --{output_dir}/{person}/{city}          (output_dir defaults to {person}_output_dir)
    |
@@ -58,6 +85,11 @@ c) Once the consolidated view is generated in {person}_{starting_month_year}_{fo
    |....
    |
    |-{person}_{starting_month_year}_{forward_looking_months}.json
+
+--{output_dir}/{A}_{B}                  (group runs; output_dir defaults to {A}_{B}_output_dir)
+   |
+   |-{A}_{B}_{starting_month_year}_{forward_looking_months}.json
+   |-{A}_{B}_{starting_month_year}_{forward_looking_months}.txt
 
 ## References
 For domain knowledge on Nakshatram, Tamil Yogam, how auspicious days/times are calculated, please refer the following reference file.

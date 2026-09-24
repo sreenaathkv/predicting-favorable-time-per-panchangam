@@ -40,5 +40,34 @@ The input value for the placeholder marked with {} is same as the input passed t
 -- Use `---` horizontal rules to separate major sections
 - Include blank lines between sections for readability
 
+# Group (couple) template
 
+Use this for `panchangam_utils.py group` results (`{A}_{B}_{starting_month_year}_{N}.json`). Add one local-time column per person, in the same order as `participants`, and repeat the per-month section for every month. When a month has no `common_windows`, produce a single "NIL" row.
+
+```markdown
+# Common Favorable Times for {group}
+
+| Person | Birth Nakshatram | City (time zone) | Favorable weekdays |
+| --- | --- | --- | --- |
+| Jai | Uthiradam | Sunnyvale, CA (America/Los_Angeles) | Mon, Wed, Fri, Sat |
+| Sai | Poosam | Chennai, India (Asia/Kolkata) | Tue, Wed, Thu, Sat |
+
+**Common favorable nakshatrams:** {common_favorable_nakshatrams}
+**Forecast window:** {forward_looking_months} months from {starting_month_year}
+
+---
+## October 2026: 2 common windows
+
+| # | Jai (Sunnyvale) | Sai (Chennai) | Together for |
+| --- | --- | --- | --- |
+| 1 | Wed, Oct 21, 07:17 AM – 11:00 AM | Wed, Oct 21, 07:47 PM – 11:30 PM | 3h 43m |
+| 2 | Sat, Oct 24, 08:02 AM – 12:00 PM | Sat, Oct 24, 08:32 PM – Oct 25, 12:30 AM | 3h 58m |
+
+## November 2026: 0 common windows
+
+| # | Jai (Sunnyvale) | Sai (Chennai) | Together for |
+| --- | --- | --- | --- |
+| NIL | NIL | NIL | NIL |
+```
+(The rows above are illustrative placeholders; always use the values from the JSON.)
 

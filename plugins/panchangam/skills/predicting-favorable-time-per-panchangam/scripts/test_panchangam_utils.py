@@ -1003,7 +1003,16 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
             self.assertFalse((Path(tmp_dir).parent / "sreenaath_output_dir").exists())
 
     def test_explicit_output_dir_still_takes_precedence_over_default(self):
+        import os
         import tempfile
+
+        # Run from an empty working directory so a real (gitignored)
+        # "Sreenaath_output_dir" left in scripts/ by a genuine run can't make
+        # this pass or fail (macOS file systems are case-insensitive).
+        cwd_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(cwd_dir.cleanup)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(cwd_dir.name)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = fetch_favorable_month_days(
@@ -1907,6 +1916,196 @@ class TestCliSubprocess(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0)
         self.assertIn("usage:", completed.stdout)
+
+
+class TestGroupIntervalHelpers(unittest.TestCase):
+    """Pure helpers behind find_common_favorable_times."""
+
+    def test_merge_intervals_sorts_and_joins_touching_and_overlapping(self):
+        self.assertEqual(pu._merge_intervals([(5, 8), (0, 2), (2, 3), (7, 10)]), [(0, 3), (5, 10)])
+
+    def test_intersect_intervals(self):
+        a = [(0, 10), (20, 30), (40, 50)]
+        b = [(5, 25), (45, 60)]
+        self.assertEqual(pu._intersect_intervals(a, b), [(5, 10), (20, 25), (45, 50)])
+
+    def test_intersect_intervals_ignores_mere_touching(self):
+        self.assertEqual(pu._intersect_intervals([(0, 10)], [(10, 20)]), [])
+
+    def test_local_minutes_to_utc_handles_pacific_daylight_and_standard_time(self):
+        from zoneinfo import ZoneInfo
+
+        la = ZoneInfo("America/Los_Angeles")
+        # 10:05 PM PDT (UTC-7) on Sep 23, 2026
+        self.assertEqual(pu._local_minutes_to_utc(date(2026, 9, 23), 22 * 60 + 5, la).isoformat(), "2026-09-24T05:05:00+00:00")
+        # 7:30 PM PST (UTC-8) on Nov 30, 2026, after DST ends on Nov 1
+        self.assertEqual(pu._local_minutes_to_utc(date(2026, 11, 30), 19 * 60 + 30, la).isoformat(), "2026-12-01T03:30:00+00:00")
+
+    def test_local_minutes_to_utc_accepts_minutes_past_midnight_into_next_day(self):
+        from zoneinfo import ZoneInfo
+
+        kolkata = ZoneInfo("Asia/Kolkata")
+        # 24h + 1:43 AM IST past Oct 13 == Oct 14 01:43 IST == Oct 13 20:13 UTC
+        self.assertEqual(
+            pu._local_minutes_to_utc(date(2026, 10, 13), 24 * 60 + 103, kolkata).isoformat(), "2026-10-13T20:13:00+00:00"
+        )
+
+    def test_same_instant_in_chennai_and_sunnyvale(self):
+        from zoneinfo import ZoneInfo
+
+        sunnyvale = pu._local_minutes_to_utc(date(2026, 9, 23), 22 * 60 + 5, ZoneInfo("America/Los_Angeles"))
+        chennai = pu._local_minutes_to_utc(date(2026, 9, 24), 10 * 60 + 35, ZoneInfo("Asia/Kolkata"))
+        self.assertEqual(sunnyvale, chennai)
+
+    def test_city_timezone(self):
+        self.assertEqual(pu._city_timezone(resolve_geoname_id("Sunnyvale")).key, "America/Los_Angeles")
+        self.assertEqual(pu._city_timezone(resolve_geoname_id("Chennai")).key, "Asia/Kolkata")
+
+    def test_favorable_intervals_extends_entire_day_into_next_day_continuation(self):
+        html = load_fixture("sunnyvale_2026-10-17_entire_day_crosses_next_day.html")
+        day_result = pu._parse_day_panchang(html, date(2026, 10, 17))
+        indices = favorable_nakshatram_indices("Uthiradam")
+        # Rendered as "Entire day (favorable until October 18, 2026 12:19 AM)"
+        self.assertEqual(
+            pu._build_favorable_entry(day_result, indices),
+            "October 17, 2026 - Entire day (favorable until October 18, 2026 12:19 AM)",
+        )
+        self.assertEqual(pu._favorable_intervals(day_result, indices), [(0, 24 * 60 + 19)])
+
+    def test_parse_group_member_spec(self):
+        self.assertEqual(
+            pu._parse_group_member_spec("Jai; Uthiradam; Sunnyvale, CA; Monday, Wednesday Friday"),
+            {
+                "person": "Jai",
+                "input_nakshatram": "Uthiradam",
+                "input_city_name": "Sunnyvale, CA",
+                "fav_days_of_week": ["Monday", "Wednesday", "Friday"],
+            },
+        )
+
+    def test_parse_group_member_spec_rejects_wrong_field_count(self):
+        import argparse
+
+        with self.assertRaises(argparse.ArgumentTypeError):
+            pu._parse_group_member_spec("Jai;Uthiradam;Chennai")
+
+
+class TestFindCommonFavorableTimes(unittest.TestCase):
+    """End-to-end over the captured Sunnyvale September 2026 fixtures (offline)."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _session(self):
+        html_by_date = {}
+        for path in SUNNYVALE_SEPTEMBER_2026_FIXTURES_DIR.glob("*.html"):
+            day, month, year = path.stem.split("-")
+            html_by_date[f"{day}/{month}/{year}"] = path.read_text(encoding="utf-8")
+        # Days just outside September (scanned as a cross-time-zone buffer) get an
+        # all-day-Marana page, so they contribute nothing.
+        return _FixtureSession(html_by_date, default_html=load_fixture("chennai_2026-01-01_none.html"))
+
+    def _run(self, people):
+        return pu.find_common_favorable_times(
+            people,
+            "September 2026",
+            1,
+            output_dir=self._tmp.name,
+            use_cache=False,
+            request_delay_seconds=0,
+            session=self._session(),
+        )
+
+    def test_requires_at_least_two_people(self):
+        with self.assertRaises(ValueError):
+            pu.find_common_favorable_times(
+                [{"person": "A", "input_nakshatram": "Uthiradam", "input_city_name": "Sunnyvale", "fav_days_of_week": ["Monday"]}],
+                "September 2026",
+                1,
+                output_dir=self._tmp.name,
+                session=_FailingSession(),
+            )
+
+    def test_common_weekdays_restrict_the_result(self):
+        # Same nakshatram and city; B only has Wednesday, so the group result is
+        # exactly the individual's Wednesday windows (see the Sunnyvale regression
+        # test for the individual results).
+        result = self._run(
+            [
+                {"person": "A", "input_nakshatram": "Uthiradam", "input_city_name": "Sunnyvale",
+                 "fav_days_of_week": ["Monday", "Wednesday", "Friday", "Saturday"]},
+                {"person": "B", "input_nakshatram": "Uthiradam", "input_city_name": "Sunnyvale",
+                 "fav_days_of_week": ["Wednesday"]},
+            ]
+        )
+        windows = result["months"][0]["common_windows"]
+        spans = [(w["local_times"][0]["start"], w["local_times"][0]["end"]) for w in windows]
+        self.assertEqual(
+            spans,
+            [
+                ("Wednesday, September 9, 2026 12:00 AM", "Thursday, September 10, 2026 01:34 AM"),
+                ("Wednesday, September 16, 2026 12:00 AM", "Thursday, September 17, 2026 12:00 AM"),
+                ("Wednesday, September 23, 2026 10:05 PM", "Thursday, September 24, 2026 12:00 AM"),
+                ("Wednesday, September 30, 2026 05:32 PM", "Thursday, October 1, 2026 12:00 AM"),
+            ],
+        )
+        self.assertEqual(windows[2]["duration_minutes"], 115)
+        self.assertEqual(result["participants"][0]["timezone"], "America/Los_Angeles")
+
+    def test_common_favorable_nakshatrams_is_the_intersection(self):
+        result = self._run(
+            [
+                {"person": "A", "input_nakshatram": "Uthiradam", "input_city_name": "Sunnyvale", "fav_days_of_week": ["Wednesday"]},
+                {"person": "B", "input_nakshatram": "Poosam", "input_city_name": "Sunnyvale", "fav_days_of_week": ["Wednesday"]},
+            ]
+        )
+        expected = sorted(
+            set(favorable_nakshatram_indices("Uthiradam")) & set(favorable_nakshatram_indices("Poosam"))
+        )
+        self.assertEqual(result["common_favorable_nakshatrams"], [NAKSHATRAS[i]["Tamil"] for i in expected])
+
+    def test_writes_json_and_txt_under_group_folder(self):
+        import json
+        from pathlib import Path
+
+        result = self._run(
+            [
+                {"person": "A", "input_nakshatram": "Uthiradam", "input_city_name": "Sunnyvale", "fav_days_of_week": ["Wednesday"]},
+                {"person": "B", "input_nakshatram": "Uthiradam", "input_city_name": "Sunnyvale", "fav_days_of_week": ["Wednesday"]},
+            ]
+        )
+        json_path = Path(result["output_file"])
+        self.assertEqual(json_path, Path(self._tmp.name) / "A_B" / "A_B_September_2026_1.json")
+        self.assertEqual(json.loads(json_path.read_text())["group"], "A & B")
+        self.assertTrue(json_path.with_suffix(".txt").exists())
+
+
+class TestGroupCli(unittest.TestCase):
+    def test_group_subcommand_dispatches(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        with mock.patch.object(pu, "find_common_favorable_times") as fake:
+            fake.return_value = {"common_favorable_nakshatrams": ["Rohini"], "months": [], "output_file": "x.json"}
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = pu.main([
+                    "group",
+                    "--person", "A;Uthiradam;Sunnyvale, CA;Monday,Wednesday",
+                    "--person", "B;Poosam;Chennai, India;Wednesday",
+                    "September 2026",
+                    "--forward-looking-months", "2",
+                ])
+        self.assertEqual(code, 0)
+        people, month_year, months = fake.call_args.args
+        self.assertEqual([p["person"] for p in people], ["A", "B"])
+        self.assertEqual(people[0]["input_city_name"], "Sunnyvale, CA")
+        self.assertEqual((month_year, months), ("September 2026", 2))
+        self.assertIn("x.json", out.getvalue())
 
 
 if __name__ == "__main__":
