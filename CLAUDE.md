@@ -17,7 +17,7 @@ update. Personal results (`*_output_dir/`), `panchang_cache/`, `.venv/` and
 implementation is done and complete:
 `plugins/panchangam/skills/predicting-favorable-time-per-panchangam/scripts/panchangam_utils.py`
 (1000+ lines) satisfies the 1800+-line test suite in
-`scripts/test_panchangam_utils.py` (166 tests, all passing), the
+`scripts/test_panchangam_utils.py` (184 tests, all passing), the
 `scripts/tests_fixtures/` HTML fixtures it loads exist, and
 `scripts/requirements.txt` pins dependencies. `scripts/prompt.md` is a
 running log of every prompt that drove the implementation and its bug

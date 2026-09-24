@@ -43,6 +43,10 @@ STATE_DIR="$HOME/.cache/predicting-favorable-time-per-panchangam"
 
 Pass `--output-dir <dir>` only if the user asked for a specific output location.
 
+**Data sources and fallback** - Each day's Tamil Nakshatram and Tamil Yogam come from www.drikpanchang.com, the reference source. If drikpanchang.com is CAPTCHA-blocked or unreachable, the script automatically falls back to www.prokerala.com (`https://www.prokerala.com/astrology/tamil-panchangam/YYYY-month-DD.html?loc=<geoname-id>`) for that day. It reads prokerala's **Tamil Yogam** block (Siddha / Amrutha / Marana), *not* its separate "Yogam" block (Dhrithi, Soola, ... -- a different astrological parameter). Once a site is blocked, it isn't retried for the rest of the run.
+
+The two sites agree on nakshatram timings but occasionally disagree on the Tamil Yogam for a given weekday + nakshatram (about 1 day in 5 in testing). When the output reports fallback dates (the CLI prints a "Note: ... came from prokerala.com" line, and the JSON has `data_sources.fallback_dates`), tell the user which dates came from prokerala.com and that those dates may differ from drikpanchang.com, and offer to re-run once drikpanchang.com is reachable. Pass `--no-fallback` to use drikpanchang.com only.
+
 **Step 3 : Report to user** - 
 a) The above step (Step 2) runs through complex calculation by finding intersection of favorable days of the week AND favorable nakshatrams relative to birth nakshatram AND favorable yogam (Siddha or Amrutha Tamil yogam). When combination of all three of them exists for a given day, that narrow window of time becomes a favorable time for that person. The above step should produce the results for the person under a per-person, per-city subfolder `{person}/{city}/` of either the user provided 'output_dir' argument or the '{person}_output_dir' directory relative to the user's current working directory (e.g. `Sai_output_dir/Sai/Chennai/`). Keeping each city in its own subfolder means running the same person for a second city does not overwrite the first city's results.
 

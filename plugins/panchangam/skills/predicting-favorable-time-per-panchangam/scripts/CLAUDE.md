@@ -91,3 +91,17 @@ finds moments favorable for **every** person at once, where people may live in d
 - Output: `{output_dir}/{A}_{B}/{A}_{B}_{starting_month_year}_{N}.json` + `.txt`, with `output_dir` defaulting to `{A}_{B}_output_dir`. The JSON holds `participants` (with `timezone`), `common_favorable_nakshatrams`, and `months[].common_windows[]` of `{start_utc, end_utc, duration_minutes, local_times[{person, input_city_name, timezone, start, end}]}`.
 
 Tests: `TestGroupIntervalHelpers`, `TestFindCommonFavorableTimes` (offline, over the Sunnyvale September 2026 fixtures) and `TestGroupCli`.
+
+## Panchang data sources: drikpanchang.com + prokerala.com fallback
+
+`fetch_day_panchang(geoname_id, day_date, *, sources=DEFAULT_PANCHANG_SOURCES, ..., unavailable_sources=None)` is the top-level, source-agnostic day lookup that `fetch_favorable_month_days` and `find_common_favorable_times` both call. It returns the `_parse_day_panchang`-shaped `day_result` plus a `"source"` key.
+
+- **Order and fallback:** it tries each source in order, drikpanchang.com (`DRIKPANCHANG`) then prokerala.com (`PROKERALA`), each from cache first and then live. A `DrikPanchangBlockedError` (including its subclass `PanchangSourceBlockedError`) or a `requests.RequestException` moves on to the next source. When every source fails, it raises `PanchangSourceBlockedError`.
+- **Blocked sources:** `unavailable_sources` is a per-run set. A source that gets blocked is not retried live for the rest of that run, though its cached pages are still used.
+- **Cache files:** drikpanchang pages are cached as `{gid}_{YYYYMMDD}.html`, unchanged; prokerala pages as `{gid}_{YYYYMMDD}.prokerala.html` in the same directory.
+- **Reporting fallbacks:** callers record which days fell back. Individual runs store this in the month dicts and JSON as `data_sources: {days_by_source, fallback_dates}`; group JSON stores `data_sources.fallback_dates`. The CLI prints a note, and `--no-fallback` restricts sources to drikpanchang only.
+- **The prokerala parser:** `_parse_prokerala_day_panchang` produces the same segment and continuation shape as the drikpanchang parser.
+  - Nakshatrams come from `.panchang-data-nakshatra`: dated ranges, identified by link slug via `_PROKERALA_NAKSHATRA_SLUGS`, and clipped to the calendar day.
+  - Tamil Yogam comes from `.panchang-data-tamil-yoga`, **not** `.panchang-data-yoga` (the nithya yogam). Its cutoffs have no date: a cutoff before the page's sunrise is on the next day.
+  - Unlike drikpanchang, prokerala always knows when the day's last nakshatram ends, so its `_nakshatram_next_day_continuation` is often set where drikpanchang's is `None`.
+- **Known disagreement:** the sites use different weekday × nakshatram Tamil Yogam tables on some days. `TestSourceAgreement` pins these in `KNOWN_TAMIL_YOGAM_DISAGREEMENTS` (4 of 21 captured days, each flipping favorability), and asserts that nakshatram segments agree on all days. Fixtures are in `tests_fixtures/prokerala/{gid}_{YYYY-MM-DD}.html`.

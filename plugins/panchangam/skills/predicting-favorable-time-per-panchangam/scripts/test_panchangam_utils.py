@@ -2090,7 +2090,7 @@ class TestGroupCli(unittest.TestCase):
         from unittest import mock
 
         with mock.patch.object(pu, "find_common_favorable_times") as fake:
-            fake.return_value = {"common_favorable_nakshatrams": ["Rohini"], "months": [], "output_file": "x.json"}
+            fake.return_value = {"common_favorable_nakshatrams": ["Rohini"], "months": [], "output_file": "x.json", "data_sources": {"fallback_dates": []}}
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 code = pu.main([
@@ -2106,6 +2106,308 @@ class TestGroupCli(unittest.TestCase):
         self.assertEqual(people[0]["input_city_name"], "Sunnyvale, CA")
         self.assertEqual((month_year, months), ("September 2026", 2))
         self.assertIn("x.json", out.getvalue())
+
+
+PROKERALA_FIXTURES_DIR = FIXTURES_DIR / "prokerala"
+
+# Every date that has both a drikpanchang fixture and a captured prokerala.com
+# page for the same city: (date, drikpanchang fixture path, prokerala fixture path).
+_PAIRED_SOURCE_FIXTURES = [
+    *[
+        (
+            date(2026, 9, int(path.stem[:2])),
+            path,
+            PROKERALA_FIXTURES_DIR / f"5400075_2026-09-{path.stem[:2]}.html",
+        )
+        for path in sorted(SUNNYVALE_SEPTEMBER_2026_FIXTURES_DIR.glob("*.html"))
+    ],
+    (date(2026, 1, 2), FIXTURES_DIR / "chennai_2026-01-02_split_nakshatram_and_yogam.html",
+     PROKERALA_FIXTURES_DIR / "1264527_2026-01-02.html"),
+    (date(2026, 1, 29), FIXTURES_DIR / "chennai_2026-01-29_two_nakshatram_segments.html",
+     PROKERALA_FIXTURES_DIR / "1264527_2026-01-29.html"),
+    (date(2026, 2, 15), FIXTURES_DIR / "chennai_2026-02-15_three_yogam_segments.html",
+     PROKERALA_FIXTURES_DIR / "1264527_2026-02-15.html"),
+    (date(2026, 10, 17), FIXTURES_DIR / "sunnyvale_2026-10-17_entire_day_crosses_next_day.html",
+     PROKERALA_FIXTURES_DIR / "5400075_2026-10-17.html"),
+]
+
+
+def _merge_same_value_segments(segments):
+    """[(v, "12:01 PM"), (v, "08:22 PM"), (w, None)] -> [(v, "08:22 PM"), (w, None)]."""
+    merged = []
+    for value, cutoff in segments:
+        if merged and merged[-1][0] == value:
+            merged[-1] = (value, cutoff)
+        else:
+            merged.append((value, cutoff))
+    return merged
+
+
+def _times_close(a, b, tolerance_minutes=2):
+    if a is None or b is None:
+        return a == b
+    return abs(pu._cutoff_to_minutes(a) - pu._cutoff_to_minutes(b)) <= tolerance_minutes
+
+
+def _segments_match(a, b):
+    return len(a) == len(b) and all(
+        va == vb and _times_close(ca, cb) for (va, ca), (vb, cb) in zip(a, b)
+    )
+
+
+class TestProkeralaParser(unittest.TestCase):
+    """_parse_prokerala_day_panchang against captured prokerala.com pages."""
+
+    def _parse(self, name, day):
+        return pu._parse_prokerala_day_panchang((PROKERALA_FIXTURES_DIR / name).read_text(encoding="utf-8"), day)
+
+    def test_same_day_nakshatram_transition_and_open_ended_tamil_yogam(self):
+        # Sunnyvale Sep 23, 2026: Avittam until 10:05 PM, then Sadhayam (until Sep 24
+        # 10:52 PM); Tamil Yogam "Amrutha Yogam Upto - 10:05 PM", then Amrutha.
+        result = self._parse("5400075_2026-09-23.html", date(2026, 9, 23))
+        avittam = pu.resolve_nakshatra_index("Avittam")
+        self.assertEqual(result["_nakshatram_segments"], [(avittam, "10:05 PM"), (avittam + 1, None)])
+        self.assertEqual(result["_nakshatram_next_day_continuation"], "10:52 PM")
+        self.assertEqual(result["_tam_yogam_segments"], [("Amrutha", "10:05 PM"), ("Amrutha", None)])
+        self.assertIsNone(result["_tam_yogam_next_day_continuation"])
+        self.assertEqual(result["secondary_nakshatram_of_the_day"], "Sadayam")  # prokerala spells it "Sadhayam"
+
+    def test_cutoff_before_sunrise_means_next_calendar_day(self):
+        # Sunnyvale Oct 17, 2026: "Amrutha Yogam Upto - 12:18 AM" is Oct 18, 12:18 AM,
+        # so Amrutha holds the whole of Oct 17 and continues past midnight.
+        result = self._parse("5400075_2026-10-17.html", date(2026, 10, 17))
+        self.assertEqual(result["_nakshatram_segments"], [(pu.resolve_nakshatra_index("Pooraadam"), None)])
+        self.assertEqual(result["_nakshatram_next_day_continuation"], "12:18 AM")
+        self.assertEqual(result["_tam_yogam_segments"], [("Amrutha", None)])
+        self.assertEqual(result["_tam_yogam_next_day_continuation"], "12:18 AM")
+
+    def test_same_day_then_next_day_tamil_yogam_cutoffs(self):
+        # Chennai Jan 29, 2026: "Marana Upto - 07:31 AM" (same day, after sunrise),
+        # then "Marana Upto - 05:29 AM" (before sunrise, so Jan 30).
+        result = self._parse("1264527_2026-01-29.html", date(2026, 1, 29))
+        self.assertEqual(result["_tam_yogam_segments"], [("Marana", "07:31 AM"), ("Marana", None)])
+        self.assertEqual(result["_tam_yogam_next_day_continuation"], "05:29 AM")
+
+    def test_uses_the_tamil_yogam_block_not_the_nithya_yogam_block(self):
+        # The same page's plain "Yogam" block lists Dhrithi/Soola -- never those.
+        result = self._parse("5400075_2026-09-23.html", date(2026, 9, 23))
+        names = {name for name, _ in result["_tam_yogam_segments"]}
+        self.assertTrue(names <= {"Siddha", "Amrutha", "Marana"}, names)
+
+    def test_every_captured_page_parses_to_known_nakshatrams_and_tamil_yogams(self):
+        for day, _, prokerala_path in _PAIRED_SOURCE_FIXTURES:
+            with self.subTest(day=day):
+                result = pu._parse_prokerala_day_panchang(prokerala_path.read_text(encoding="utf-8"), day)
+                for index, _ in result["_nakshatram_segments"]:
+                    self.assertIn(index, range(pu.NUM_NAKSHATRAS))
+                for name, _ in result["_tam_yogam_segments"]:
+                    self.assertIn(name, {"Siddha", "Amrutha", "Marana"})
+
+    def test_blocked_page_raises_source_blocked_error(self):
+        html = "<html><body><div class='g-recaptcha'>Please complete the captcha</div></body></html>"
+        with self.assertRaises(pu.PanchangSourceBlockedError):
+            pu._parse_prokerala_day_panchang(html, date(2026, 9, 23))
+        with self.assertRaises(DrikPanchangBlockedError):  # PanchangSourceBlockedError subclasses it
+            pu._parse_prokerala_day_panchang(html, date(2026, 9, 23))
+
+    def test_prokerala_url(self):
+        self.assertEqual(
+            pu._prokerala_url(date(2026, 9, 9)),
+            "https://www.prokerala.com/astrology/tamil-panchangam/2026-september-09.html",
+        )
+
+    def test_slug_table_covers_all_27_nakshatrams_in_order(self):
+        self.assertEqual(len(pu._PROKERALA_NAKSHATRA_SLUGS), pu.NUM_NAKSHATRAS)
+        self.assertEqual(len(set(pu._PROKERALA_NAKSHATRA_SLUGS)), pu.NUM_NAKSHATRAS)
+        self.assertEqual(pu._PROKERALA_SLUG_TO_INDEX["satabhisha"], pu.resolve_nakshatra_index("Sadayam"))
+        self.assertEqual(pu._PROKERALA_SLUG_TO_INDEX["uttara-ashada"], pu.resolve_nakshatra_index("Uthiradam"))
+
+
+class TestSourceAgreement(unittest.TestCase):
+    """Cross-checks drikpanchang.com against prokerala.com for the same city and date.
+
+    Nakshatram data must agree exactly (to within 2 minutes of rounding). The
+    two sites *do* use different weekday x nakshatram tables for Tamil Yogam on
+    some days, which flips favorability -- those known disagreements are pinned
+    in KNOWN_TAMIL_YOGAM_DISAGREEMENTS so any new one (or a site changing its
+    table) fails loudly instead of silently changing predictions.
+    """
+
+    # date -> (drikpanchang's same-day Tamil Yogam values, prokerala's), after
+    # merging adjacent repeats of the same value.
+    KNOWN_TAMIL_YOGAM_DISAGREEMENTS = {
+        date(2026, 9, 9): (["Siddha"], ["Marana"]),  # Wed + Makam
+        date(2026, 9, 18): (["Siddha", "Amrutha"], ["Marana", "Amrutha"]),  # Fri + Kettai, until 10:14 AM
+        date(2026, 9, 28): (["Marana", "Siddha"], ["Marana"]),  # Mon + Bharani, after 08:33 PM
+        date(2026, 2, 15): (["Amrutha", "Marana"], ["Marana"]),  # Sun + Uthiradam, until 01:28 PM
+    }
+
+    def _both(self, day, drik_path, prokerala_path):
+        drik = pu._parse_day_panchang(drik_path.read_text(encoding="utf-8"), day)
+        prokerala = pu._parse_prokerala_day_panchang(prokerala_path.read_text(encoding="utf-8"), day)
+        return drik, prokerala
+
+    def test_nakshatram_segments_match(self):
+        for day, drik_path, prokerala_path in _PAIRED_SOURCE_FIXTURES:
+            with self.subTest(day=day):
+                drik, prokerala = self._both(day, drik_path, prokerala_path)
+                self.assertTrue(
+                    _segments_match(drik["_nakshatram_segments"], prokerala["_nakshatram_segments"]),
+                    (drik["_nakshatram_segments"], prokerala["_nakshatram_segments"]),
+                )
+                # drikpanchang often doesn't say when the day's last nakshatram ends
+                # (None); prokerala always does. Compare only when both know.
+                if drik["_nakshatram_next_day_continuation"] is not None:
+                    self.assertTrue(
+                        _times_close(
+                            drik["_nakshatram_next_day_continuation"],
+                            prokerala["_nakshatram_next_day_continuation"],
+                        )
+                    )
+
+    def test_tamil_yogam_matches_except_known_disagreements(self):
+        for day, drik_path, prokerala_path in _PAIRED_SOURCE_FIXTURES:
+            with self.subTest(day=day):
+                drik, prokerala = self._both(day, drik_path, prokerala_path)
+                drik_segments = _merge_same_value_segments(drik["_tam_yogam_segments"])
+                prokerala_segments = _merge_same_value_segments(prokerala["_tam_yogam_segments"])
+                if day in self.KNOWN_TAMIL_YOGAM_DISAGREEMENTS:
+                    expected_drik, expected_prokerala = self.KNOWN_TAMIL_YOGAM_DISAGREEMENTS[day]
+                    self.assertEqual([v for v, _ in drik_segments], expected_drik)
+                    self.assertEqual([v for v, _ in prokerala_segments], expected_prokerala)
+                    self.assertNotEqual([v for v, _ in drik_segments], [v for v, _ in prokerala_segments])
+                    continue
+                self.assertTrue(_segments_match(drik_segments, prokerala_segments), (drik_segments, prokerala_segments))
+                self.assertTrue(
+                    _times_close(drik["_tam_yogam_next_day_continuation"], prokerala["_tam_yogam_next_day_continuation"])
+                )
+
+    def test_favorable_windows_agree_on_days_without_a_tamil_yogam_disagreement(self):
+        indices = favorable_nakshatram_indices("Uthiradam")
+        for day, drik_path, prokerala_path in _PAIRED_SOURCE_FIXTURES:
+            if day in self.KNOWN_TAMIL_YOGAM_DISAGREEMENTS:
+                continue
+            with self.subTest(day=day):
+                drik, prokerala = self._both(day, drik_path, prokerala_path)
+                drik_windows = pu._favorable_windows(drik, indices)
+                prokerala_windows = pu._favorable_windows(prokerala, indices)
+                self.assertEqual(len(drik_windows), len(prokerala_windows))
+                for (ds, de), (ps, pe) in zip(drik_windows, prokerala_windows):
+                    self.assertLessEqual(abs(ds - ps), 2)
+                    self.assertLessEqual(abs(de - pe), 2)
+
+
+class _SourceRoutingSession:
+    """Fake session: drikpanchang requests get `drik_html`, prokerala requests get `prokerala_html`."""
+
+    def __init__(self, drik_html, prokerala_html):
+        self.drik_html = drik_html
+        self.prokerala_html = prokerala_html
+        self.urls = []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.urls.append(url)
+        return _FakeResponse(self.prokerala_html if "prokerala.com" in url else self.drik_html)
+
+
+class TestFetchDayPanchangFallback(unittest.TestCase):
+    DAY = date(2026, 9, 23)
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.drik_html = (SUNNYVALE_SEPTEMBER_2026_FIXTURES_DIR / "23-09-2026.html").read_text(encoding="utf-8")
+        self.prokerala_html = (PROKERALA_FIXTURES_DIR / "5400075_2026-09-23.html").read_text(encoding="utf-8")
+        self.captcha_html = load_fixture("captcha_blocked.html")
+
+    def _fetch(self, session, **kwargs):
+        return pu.fetch_day_panchang(
+            5400075, self.DAY, cache_dir=self._tmp.name, request_delay_seconds=0, session=session, **kwargs
+        )
+
+    def test_prefers_drikpanchang(self):
+        session = _SourceRoutingSession(self.drik_html, self.prokerala_html)
+        result = self._fetch(session)
+        self.assertEqual(result["source"], pu.DRIKPANCHANG)
+        self.assertEqual(len(session.urls), 1)
+
+    def test_falls_back_to_prokerala_when_drikpanchang_is_blocked(self):
+        session = _SourceRoutingSession(self.captcha_html, self.prokerala_html)
+        unavailable = set()
+        result = self._fetch(session, unavailable_sources=unavailable)
+        self.assertEqual(result["source"], pu.PROKERALA)
+        self.assertEqual(result["primary_nakshatram_for_the_day"], "Avittam")
+        self.assertEqual(unavailable, {pu.DRIKPANCHANG})
+
+    def test_blocked_source_is_not_retried_live_within_a_run(self):
+        session = _SourceRoutingSession(self.captcha_html, self.prokerala_html)
+        unavailable = {pu.DRIKPANCHANG}
+        self._fetch(session, unavailable_sources=unavailable, use_cache=False)
+        self.assertEqual(len(session.urls), 1)
+        self.assertIn("prokerala.com", session.urls[0])
+
+    def test_raises_when_every_source_is_blocked(self):
+        blocked_prokerala = "<html><body>captcha challenge</body></html>"
+        session = _SourceRoutingSession(self.captcha_html, blocked_prokerala)
+        with self.assertRaises(pu.PanchangSourceBlockedError) as ctx:
+            self._fetch(session)
+        self.assertIn("drikpanchang.com", str(ctx.exception))
+        self.assertIn("prokerala.com", str(ctx.exception))
+
+    def test_no_fallback_when_sources_limited_to_drikpanchang(self):
+        session = _SourceRoutingSession(self.captcha_html, self.prokerala_html)
+        with self.assertRaises(DrikPanchangBlockedError):
+            self._fetch(session, sources=(pu.DRIKPANCHANG,))
+
+    def test_prokerala_pages_are_cached_separately(self):
+        session = _SourceRoutingSession(self.captcha_html, self.prokerala_html)
+        self._fetch(session)
+        self.assertTrue((Path(self._tmp.name) / "5400075_20260923.prokerala.html").exists())
+        self.assertFalse((Path(self._tmp.name) / "5400075_20260923.html").exists())  # CAPTCHA never cached
+
+    def test_fetch_favorable_month_days_records_fallback_dates(self):
+        import json
+
+        class _AlwaysBlockedDrik:
+            """drikpanchang always CAPTCHAs; prokerala serves the captured page for the requested date."""
+
+            def get(self, url, params=None, headers=None, timeout=None):
+                if "prokerala.com" not in url:
+                    return _FakeResponse(load_fixture("captcha_blocked.html"))
+                day = int(url.rsplit("-", 1)[1].split(".")[0])
+                return _FakeResponse((PROKERALA_FIXTURES_DIR / f"5400075_2026-09-{day:02d}.html").read_text(encoding="utf-8"))
+
+        # All 5 September 2026 Wednesdays (2, 9, 16, 23, 30) have captured prokerala pages.
+        result = fetch_favorable_month_days(
+            ["Wednesday"],
+            "Uthiradam",
+            "Sunnyvale",
+            "September 2026",
+            1,
+            person="TestPerson",
+            output_dir=self._tmp.name,
+            cache_dir=self._tmp.name,
+            use_cache=False,
+            request_delay_seconds=0,
+            session=_AlwaysBlockedDrik(),
+        )
+        sources = result[0]["data_sources"]
+        self.assertEqual(sources["days_by_source"], {pu.PROKERALA: 5})  # 5 Wednesdays in Sep 2026
+        self.assertEqual(sources["fallback_dates"], ["2026-09-02", "2026-09-09", "2026-09-16", "2026-09-23", "2026-09-30"])
+        # Same windows drikpanchang gives for these Wednesdays, except Sep 9, where
+        # prokerala's Tamil Yogam is Marana (see TestSourceAgreement).
+        self.assertEqual(
+            result[0]["fav_days_with_ts"],
+            [
+                "September 16, 2026 - Entire day (favorable until September 17, 2026 07:23 AM)",
+                "September 23, 2026 - from 10:05 PM onwards (favorable until September 24, 2026 10:52 PM)",
+                "September 30, 2026 - from 05:32 PM onwards (favorable until October 1, 2026 03:57 PM)",
+            ],
+        )
+        saved = json.loads(Path(result[0]["consolidated_output_file"]).read_text())
+        self.assertEqual(saved["data_sources"]["days_by_source"], {pu.PROKERALA: 5})
 
 
 if __name__ == "__main__":

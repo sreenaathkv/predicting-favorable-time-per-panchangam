@@ -731,6 +731,307 @@ def _build_favorable_entry(day_result, favorable_indices):
     return f"{label} - " + "; ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# prokerala.com: alternate source for the same per-day Nakshatram/Tamil Yogam
+# data, parsed into the exact day_result shape _parse_day_panchang returns.
+# ---------------------------------------------------------------------------
+
+_PROKERALA_URL_TEMPLATE = "https://www.prokerala.com/astrology/tamil-panchangam/{year}-{month}-{day:02d}.html"
+
+# prokerala links each nakshatram to /astrology/nakshatra/{slug}-nakshatra.htm;
+# the slug set is fixed and, unlike the displayed Tamil spellings (e.g.
+# "Sadhayam", "Tiruvonam", "Mrigashirsham"), independent of transliteration.
+# Listed in the canonical NAKSHATRAS order.
+_PROKERALA_NAKSHATRA_SLUGS = [
+    "ashwini", "bharani", "krittika", "rohini", "mrigashirsha", "ardra", "punarvasu",
+    "pushya", "ashlesha", "magha", "purva-phalguni", "uttara-phalguni", "hasta", "chitra",
+    "swati", "vishaka", "anuradha", "jyeshta", "moola", "purva-ashada", "uttara-ashada",
+    "shravana", "dhanishta", "satabhisha", "purva-bhadrapada", "uttara-bhadrapada", "revati",
+]
+_PROKERALA_SLUG_TO_INDEX = {slug: index for index, slug in enumerate(_PROKERALA_NAKSHATRA_SLUGS)}
+_PROKERALA_SLUG_RE = re.compile(r"/nakshatra/([a-z-]+)-nakshatra\.htm")
+_PROKERALA_RANGE_RE = re.compile(
+    r"([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}:\d{2}\s*[AP]M)\s*[–-]\s*([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}:\d{2}\s*[AP]M)",
+    re.IGNORECASE,
+)
+
+
+class PanchangSourceBlockedError(DrikPanchangBlockedError):
+    """A panchang source served a block/CAPTCHA/error page instead of data.
+
+    Subclasses DrikPanchangBlockedError so existing `except DrikPanchangBlockedError`
+    handlers (including the CLI's) keep catching every "source unavailable" case.
+    """
+
+
+def _is_prokerala_blocked_response(html):
+    """True for a CAPTCHA/challenge page: no panchang data block, but a challenge marker."""
+    lowered = html.lower()
+    if "panchang-data-nakshatra" in lowered:
+        return False
+    return any(marker in lowered for marker in ("captcha", "cf-challenge", "challenge-platform", "access denied"))
+
+
+def _prokerala_url(day_date):
+    return _PROKERALA_URL_TEMPLATE.format(
+        year=day_date.year, month=calendar.month_name[day_date.month].lower(), day=day_date.day
+    )
+
+
+def _prokerala_datetime(month_abbr, day_str, time_str, query_date):
+    """Build a naive local datetime from prokerala's year-less "Sep 23 10:05 PM", picking the year nearest query_date."""
+    month = _MONTH_ABBR_TO_NUM[month_abbr.title()]
+    minutes = _cutoff_to_minutes(_normalize_clock(time_str))
+    candidates = []
+    for year in (query_date.year - 1, query_date.year, query_date.year + 1):
+        try:
+            candidates.append(datetime(year, month, int(day_str)) + timedelta(minutes=minutes))
+        except ValueError:
+            continue
+    anchor = datetime.combine(query_date, datetime.min.time())
+    return min(candidates, key=lambda dt: abs(dt - anchor))
+
+
+def _normalize_clock(time_str):
+    """ "7:01 AM" / "07:01 am" -> "07:01 AM" (the form the drikpanchang parser produces)."""
+    match = _TIME_RE.search(time_str)
+    if not match:
+        raise ValueError(f"Not a clock time: {time_str!r}")
+    hour, minute, meridiem = match.groups()
+    return f"{int(hour):02d}:{minute} {meridiem.upper()}"
+
+
+def _prokerala_sunrise_minutes(soup, query_date):
+    for label in soup.find_all(string=lambda text: text and text.strip() == "Sunrise"):
+        value = label.parent.find_next_sibling("span")
+        if value is not None and _TIME_RE.search(value.get_text()):
+            return _cutoff_to_minutes(_normalize_clock(value.get_text()))
+    raise ValueError(f"Could not find sunrise time in prokerala page for {query_date}")
+
+
+def _normalize_tamil_yogam_name(text):
+    """ "Amrutha Yogam" -> "Amrutha" (drikpanchang's form), tolerating spelling variants."""
+    name = re.sub(r"\s*yog(?:am|a)\s*$", "", text.strip(), flags=re.IGNORECASE).strip()
+    return {"amritha": "Amrutha", "amirtha": "Amrutha", "sidha": "Siddha"}.get(name.lower(), name)
+
+
+def _parse_prokerala_nakshatram_segments(block, query_date):
+    """Clip prokerala's dated "start – end" nakshatram ranges to query_date's (index, cutoff) segments.
+
+    Mirrors _parse_nakshathram_segments: the first listed nakshatram is taken to
+    hold from the start of the day (prokerala, like drikpanchang, lists the day
+    from sunrise), each same-day end becomes a cutoff, and the first one that
+    ends after midnight closes the day -- its end time becomes the next-day
+    continuation when it falls on the very next calendar day.
+    """
+    day_end = datetime.combine(query_date + timedelta(days=1), datetime.min.time())
+    day_start = day_end - timedelta(days=1)
+    segments = []
+    for item in block.select("li"):
+        link = item.find("a", href=_PROKERALA_SLUG_RE)
+        match = _PROKERALA_RANGE_RE.search(item.get_text(" ", strip=True))
+        if link is None or match is None:
+            continue
+        slug = _PROKERALA_SLUG_RE.search(link["href"]).group(1)
+        if slug not in _PROKERALA_SLUG_TO_INDEX:
+            raise ValueError(f"Unknown prokerala nakshatra slug {slug!r} for {query_date}")
+        index = _PROKERALA_SLUG_TO_INDEX[slug]
+        end = _prokerala_datetime(match.group(4), match.group(5), match.group(6), query_date)
+        if end <= day_start:
+            continue
+        if end >= day_end:
+            segments.append((index, None))
+            continuation = _normalize_clock(match.group(6)) if end < day_end + timedelta(days=1) else None
+            return segments, continuation
+        segments.append((index, _normalize_clock(match.group(6))))
+    if not segments:
+        raise ValueError(f"Could not find nakshatram data in prokerala page for {query_date}")
+    # Every listed nakshatram ended the same day: whatever follows holds for the rest of it.
+    segments.append(((segments[-1][0] + 1) % NUM_NAKSHATRAS, None))
+    return segments, None
+
+
+def _parse_prokerala_tamil_yoga_segments(block, query_date, sunrise_minutes):
+    """Turn prokerala's "Tamil Yogam" list into (name, cutoff) segments for query_date.
+
+    prokerala's "Upto - HH:MM" carries no date. Its panchang day runs sunrise to
+    sunrise, so a cutoff earlier than that day's sunrise is on the next calendar
+    day -- which, like drikpanchang's "upto X, <next date>", means the value
+    holds for the rest of query_date and becomes the next-day continuation.
+
+    This is the Tamil Yogam block (Siddha / Amrutha / Marana ...), NOT the
+    separate "Yogam" block (Dhrithi, Soola, ... -- the 27 nithya yogams).
+    """
+    segments = []
+    for item in block.select("li"):
+        name_tag = item.find("strong")
+        if name_tag is None:
+            continue
+        name = _normalize_tamil_yogam_name(name_tag.get_text(" ", strip=True))
+        upto = re.search(r"upto\s*-?\s*(\d{1,2}:\d{2}\s*[AP]M)", item.get_text(" ", strip=True), re.IGNORECASE)
+        if upto is None:
+            segments.append((name, None))
+            return segments, None
+        cutoff = _normalize_clock(upto.group(1))
+        if _cutoff_to_minutes(cutoff) < sunrise_minutes:
+            segments.append((name, None))
+            return segments, cutoff
+        segments.append((name, cutoff))
+    if not segments:
+        raise ValueError(f"Could not find Tamil Yogam data in prokerala page for {query_date}")
+    return segments, None
+
+
+def _parse_prokerala_day_panchang(html, query_date):
+    """Parse one prokerala.com Tamil panchangam page into the same dict _parse_day_panchang returns."""
+    if _is_prokerala_blocked_response(html):
+        raise PanchangSourceBlockedError(f"prokerala.com served a CAPTCHA/block page for {query_date}.")
+    soup = BeautifulSoup(html, "lxml")
+    nak_block = soup.select_one(".panchang-data-nakshatra")
+    yogam_block = soup.select_one(".panchang-data-tamil-yoga")
+    if nak_block is None or yogam_block is None:
+        raise ValueError(f"Could not find Nakshatram/Tamil Yogam blocks in prokerala page for {query_date}")
+
+    nak_segments, nak_next_day_continuation = _parse_prokerala_nakshatram_segments(nak_block, query_date)
+    yogam_segments, yogam_next_day_continuation = _parse_prokerala_tamil_yoga_segments(
+        yogam_block, query_date, _prokerala_sunrise_minutes(soup, query_date)
+    )
+    return {
+        "date": query_date,
+        "primary_nakshatram_for_the_day": NAKSHATRAS[nak_segments[0][0]]["Tamil"],
+        "secondary_nakshatram_of_the_day": (
+            NAKSHATRAS[nak_segments[1][0]]["Tamil"] if len(nak_segments) > 1 else None
+        ),
+        "primary_tam_yogam_for_the_day": yogam_segments[0][0],
+        "secondary_tam_yogam_of_the_day": yogam_segments[1][0] if len(yogam_segments) > 1 else None,
+        "_nakshatram_segments": nak_segments,
+        "_tam_yogam_segments": yogam_segments,
+        "_nakshatram_next_day_continuation": nak_next_day_continuation,
+        "_tam_yogam_next_day_continuation": yogam_next_day_continuation,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Top-level, source-agnostic day lookup: drikpanchang.com first, prokerala.com
+# as a fallback whenever a source is blocked/unreachable.
+# ---------------------------------------------------------------------------
+
+DRIKPANCHANG = "drikpanchang.com"
+PROKERALA = "prokerala.com"
+DEFAULT_PANCHANG_SOURCES = (DRIKPANCHANG, PROKERALA)
+
+
+def _source_cache_path(source, geoname_id, day_date, cache_dir):
+    if source == DRIKPANCHANG:
+        return _cache_path(geoname_id, day_date, cache_dir)  # unchanged, pre-existing layout
+    base = Path(cache_dir) if cache_dir else _DEFAULT_CACHE_DIR
+    return base / f"{geoname_id}_{day_date.strftime('%Y%m%d')}.prokerala.html"
+
+
+def _fetch_prokerala_html(
+    geoname_id,
+    day_date,
+    use_cache=True,
+    cache_dir=None,
+    request_delay_seconds=_DEFAULT_REQUEST_DELAY_SECONDS,
+    session=None,
+):
+    """Fetch (or read from disk cache) the prokerala.com Tamil panchangam page for one day.
+
+    Same contract as _fetch_day_panchang_html: no TTL, and a block/CAPTCHA
+    page is never cached (raises PanchangSourceBlockedError instead).
+    """
+    path = _source_cache_path(PROKERALA, geoname_id, day_date, cache_dir)
+    if use_cache and path.exists():
+        return path.read_text(encoding="utf-8")
+
+    getter = session.get if session is not None else requests.get
+    response = getter(_prokerala_url(day_date), params={"loc": geoname_id}, headers=_REQUEST_HEADERS, timeout=20)
+    if getattr(response, "status_code", 200) in (403, 429, 503):
+        raise PanchangSourceBlockedError(
+            f"prokerala.com refused the request for {day_date} (HTTP {response.status_code})."
+        )
+    response.raise_for_status()
+    html = response.text
+    if _is_prokerala_blocked_response(html):
+        raise PanchangSourceBlockedError(f"prokerala.com served a CAPTCHA/block page for {day_date}.")
+
+    if use_cache:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8")
+    if request_delay_seconds:
+        time.sleep(request_delay_seconds)
+    return html
+
+
+_SOURCE_FETCHERS = {
+    DRIKPANCHANG: (_fetch_day_panchang_html, _parse_day_panchang),
+    PROKERALA: (_fetch_prokerala_html, _parse_prokerala_day_panchang),
+}
+
+
+def fetch_day_panchang(
+    geoname_id,
+    day_date,
+    *,
+    sources=DEFAULT_PANCHANG_SOURCES,
+    use_cache=True,
+    cache_dir=None,
+    request_delay_seconds=_DEFAULT_REQUEST_DELAY_SECONDS,
+    session=None,
+    unavailable_sources=None,
+):
+    """Return one day's primary/secondary Tamil Nakshatram and Tamil Yogam for a city, from any source.
+
+    Tries each of `sources` in order (default: drikpanchang.com, then
+    prokerala.com) -- cached page first, then a live request -- and returns
+    the first successfully parsed day_result (the dict _parse_day_panchang
+    documents), with an added "source" key naming where it came from. A
+    source that is blocked (CAPTCHA/rate-limit/HTTP 403/429/503) or
+    unreachable is skipped in favor of the next one.
+
+    `unavailable_sources`, if given, is a set shared across calls within one
+    run: a source that gets blocked is added to it and not retried live for
+    the rest of that run (its cached pages are still used), so a blocked site
+    isn't hammered once per remaining day.
+
+    Note the two sites agree on nakshatram timings but *not always* on the
+    Tamil Yogam for a given weekday+nakshatram (see TestSourceAgreement), so
+    drikpanchang.com -- this skill's reference source -- is always preferred.
+
+    Raises PanchangSourceBlockedError (a DrikPanchangBlockedError) if no
+    source could provide the day.
+    """
+    if unavailable_sources is None:
+        unavailable_sources = set()
+    failures = []
+    for source in sources:
+        fetch, parse = _SOURCE_FETCHERS[source]
+        cached = use_cache and _source_cache_path(source, geoname_id, day_date, cache_dir).exists()
+        if source in unavailable_sources and not cached:
+            failures.append(f"{source}: skipped (blocked earlier in this run)")
+            continue
+        try:
+            html = fetch(
+                geoname_id,
+                day_date,
+                use_cache=use_cache,
+                cache_dir=cache_dir,
+                request_delay_seconds=request_delay_seconds,
+                session=session,
+            )
+            day_result = parse(html, day_date)
+        except (DrikPanchangBlockedError, requests.RequestException) as exc:
+            unavailable_sources.add(source)
+            failures.append(f"{source}: {exc}")
+            continue
+        day_result["source"] = source
+        return day_result
+    raise PanchangSourceBlockedError(
+        f"No panchang source could provide {day_date} for geoname-id {geoname_id}. " + " | ".join(failures)
+    )
+
+
 def _slugify_for_filename(text, label="value"):
     """Turn arbitrary text into a filesystem-safe path component.
 
@@ -807,7 +1108,14 @@ def _split_favorable_entry_into_row(entry):
 
 
 def collate_and_save_predictions(
-    person, input_nakshatram, input_city_name, starting_month_year, forward_looking_months, output_dir, favorable_days_with_ts
+    person,
+    input_nakshatram,
+    input_city_name,
+    starting_month_year,
+    forward_looking_months,
+    output_dir,
+    favorable_days_with_ts,
+    data_sources=None,
 ):
     """Collate every forward-looking month's favorable days into one consolidated JSON file.
 
@@ -839,6 +1147,10 @@ def collate_and_save_predictions(
         "forward_looking_months": forward_looking_months,
         "months": months_table,
     }
+    if data_sources is not None:
+        # Which site each day's data came from; "fallback_dates" lists days that
+        # had to come from prokerala.com because drikpanchang.com was blocked.
+        consolidated["data_sources"] = data_sources
 
     city_dir = _person_city_output_dir(output_dir, person, input_city_name)
     file_name = (
@@ -866,6 +1178,7 @@ def fetch_favorable_month_days(
     session=None,
     city_chooser=None,
     interactive=True,
+    sources=DEFAULT_PANCHANG_SOURCES,
 ):
     """Find favorable days, on given weekdays, over a forward-looking window of months.
 
@@ -933,19 +1246,26 @@ def fetch_favorable_month_days(
     geoname_id = resolve_geoname_id(input_city_name, chooser=city_chooser, interactive=interactive)
     start_year, start_month = _parse_month_year(starting_month_year)
 
+    unavailable_sources = set()
+    source_counts = {}
+    fallback_dates = []
     favorable_days_with_ts = []
     for year, month in _forward_looking_months(start_year, start_month, forward_looking_months):
         month_entries = []
         for day_date in _dates_in_month_for_weekdays(year, month, weekday_names):
-            html = _fetch_day_panchang_html(
+            day_result = fetch_day_panchang(
                 geoname_id,
                 day_date,
+                sources=sources,
                 use_cache=use_cache,
                 cache_dir=cache_dir,
                 request_delay_seconds=request_delay_seconds,
                 session=session,
+                unavailable_sources=unavailable_sources,
             )
-            day_result = _parse_day_panchang(html, day_date)
+            source_counts[day_result["source"]] = source_counts.get(day_result["source"], 0) + 1
+            if day_result["source"] != DRIKPANCHANG:
+                fallback_dates.append(day_date.isoformat())
             entry = _build_favorable_entry(day_result, favorable_indices)
             if entry is not None:
                 month_entries.append(entry)
@@ -968,9 +1288,11 @@ def fetch_favorable_month_days(
         forward_looking_months,
         output_dir,
         favorable_days_with_ts,
+        data_sources={"days_by_source": source_counts, "fallback_dates": fallback_dates},
     )
     for month_result in favorable_days_with_ts:
         month_result["consolidated_output_file"] = str(consolidated_file_path)
+        month_result["data_sources"] = {"days_by_source": source_counts, "fallback_dates": fallback_dates}
 
     return favorable_days_with_ts
 
@@ -1110,6 +1432,7 @@ def find_common_favorable_times(
     session=None,
     city_chooser=None,
     interactive=True,
+    sources=DEFAULT_PANCHANG_SOURCES,
 ):
     """Find time windows that are favorable for every person in `people` at the same moment.
 
@@ -1159,6 +1482,8 @@ def find_common_favorable_times(
     last_year, last_month = months[-1]
     window_last = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
 
+    unavailable_sources = set()
+    fallback_dates = []
     common = None
     for member in members:
         favorable_indices = favorable_nakshatram_indices(member["input_nakshatram"])
@@ -1171,15 +1496,18 @@ def find_common_favorable_times(
         for day_date in _dates_between_for_weekdays(
             window_first - timedelta(days=1), window_last + timedelta(days=1), member["fav_days_of_week"]
         ):
-            html = _fetch_day_panchang_html(
+            day_result = fetch_day_panchang(
                 geoname_id,
                 day_date,
+                sources=sources,
                 use_cache=use_cache,
                 cache_dir=cache_dir,
                 request_delay_seconds=request_delay_seconds,
                 session=session,
+                unavailable_sources=unavailable_sources,
             )
-            day_result = _parse_day_panchang(html, day_date)
+            if day_result["source"] != DRIKPANCHANG:
+                fallback_dates.append(f"{member['person']}: {day_date.isoformat()}")
             for start, end in _favorable_intervals(day_result, favorable_indices):
                 intervals.append((_local_minutes_to_utc(day_date, start, tz), _local_minutes_to_utc(day_date, end, tz)))
         intervals = _merge_intervals(intervals)
@@ -1224,6 +1552,7 @@ def find_common_favorable_times(
             for member in members
         ],
         "common_favorable_nakshatrams": [NAKSHATRAS[i]["Tamil"] for i in sorted(common_indices)],
+        "data_sources": {"fallback_dates": fallback_dates},
         "months": [
             {"month": calendar.month_name[month], "year": year, "common_windows": month_buckets[(year, month)]}
             for year, month in months
@@ -1303,6 +1632,14 @@ def _build_arg_parser():
         help=f"Delay between live drikpanchang requests, in seconds (default: {_DEFAULT_REQUEST_DELAY_SECONDS}).",
     )
     parser.add_argument(
+        "--no-fallback",
+        dest="sources",
+        action="store_const",
+        const=(DRIKPANCHANG,),
+        default=DEFAULT_PANCHANG_SOURCES,
+        help="Only use drikpanchang.com; don't fall back to prokerala.com when it's blocked.",
+    )
+    parser.add_argument(
         "--non-interactive",
         dest="interactive",
         action="store_false",
@@ -1310,6 +1647,14 @@ def _build_arg_parser():
         help="Don't prompt to disambiguate an ambiguous city name; raise an error instead.",
     )
     return parser
+
+
+def _print_fallback_note(fallback_dates):
+    if fallback_dates:
+        print(
+            f"Note: {len(fallback_dates)} day(s) came from prokerala.com because drikpanchang.com was "
+            f"blocked: {', '.join(fallback_dates)}. The two sites occasionally disagree on Tamil Yogam."
+        )
 
 
 def _parse_group_member_spec(spec):
@@ -1366,6 +1711,14 @@ def _build_group_arg_parser():
     parser.add_argument("--cache-dir", default=None, help="Directory to cache fetched drikpanchang pages in.")
     parser.add_argument("--no-cache", dest="use_cache", action="store_false", default=True)
     parser.add_argument("--request-delay-seconds", type=float, default=_DEFAULT_REQUEST_DELAY_SECONDS)
+    parser.add_argument(
+        "--no-fallback",
+        dest="sources",
+        action="store_const",
+        const=(DRIKPANCHANG,),
+        default=DEFAULT_PANCHANG_SOURCES,
+        help="Only use drikpanchang.com; don't fall back to prokerala.com when it's blocked.",
+    )
     parser.add_argument("--non-interactive", dest="interactive", action="store_false", default=True)
     return parser
 
@@ -1383,6 +1736,7 @@ def _group_main(argv):
             cache_dir=args.cache_dir,
             request_delay_seconds=args.request_delay_seconds,
             interactive=args.interactive,
+            sources=args.sources,
         )
     except (ValueError, DrikPanchangBlockedError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -1398,6 +1752,7 @@ def _group_main(argv):
             for local in window["local_times"]:
                 print(f"    {local['person']} ({local['input_city_name']}): {local['start']} -> {local['end']}")
     print(f"Consolidated summary saved to {result['output_file']}")
+    _print_fallback_note(result["data_sources"]["fallback_dates"])
     return 0
 
 
@@ -1435,6 +1790,7 @@ def main(argv=None):
             cache_dir=args.cache_dir,
             request_delay_seconds=args.request_delay_seconds,
             interactive=args.interactive,
+            sources=args.sources,
         )
     except (ValueError, DrikPanchangBlockedError) as exc:
         # ValueError also covers AmbiguousCityError, a subclass.
@@ -1451,6 +1807,7 @@ def main(argv=None):
         print(f"  (saved to {month_result['output_file']})")
 
     print(f"Consolidated summary saved to {results[0]['consolidated_output_file']}")
+    _print_fallback_note(results[0]["data_sources"]["fallback_dates"])
 
     return 0
 
