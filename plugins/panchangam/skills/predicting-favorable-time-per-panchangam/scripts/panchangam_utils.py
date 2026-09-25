@@ -592,8 +592,13 @@ def _parse_day_panchang(html, query_date):
     nak_segments, nak_next_day_continuation = _parse_nakshathram_segments(nak_elements, query_date)
     yogam_segments, yogam_next_day_continuation = _parse_tamil_yoga_segments(yogam_elements, query_date)
 
+    sunrise_minutes = _parse_drik_sunrise_minutes(wrapper, query_date)
+    nakshatram_timeline = _finalize_timeline(_parse_drik_nakshatram_timeline(nak_elements, query_date), sunrise_minutes)
+
     return {
         "date": query_date,
+        "_sunrise_minutes": sunrise_minutes,
+        "_nakshatram_timeline": nakshatram_timeline,
         "primary_nakshatram_for_the_day": NAKSHATRAS[nak_segments[0][0]]["Tamil"],
         "secondary_nakshatram_of_the_day": (
             NAKSHATRAS[nak_segments[1][0]]["Tamil"] if len(nak_segments) > 1 else None
@@ -642,93 +647,183 @@ def _value_at(segments, minute):
     return segments[-1][0]
 
 
+# ---------------------------------------------------------------------------
+# Tamil Yogam: computed from the traditional weekday x nakshatram chart.
+# ---------------------------------------------------------------------------
+
+# The Amirtha / Siddha / Marana yogam chart printed on the first page of the
+# Vakya (Pambu) Panchangam, transcribed from
+# https://www.mahastro.com/how-to-use-vakya-panchangam-or-pambu-panchangam/
+# ("Yogam - Column 1"; அ = Amirtha, சி = Siddha, ம = Marana). One row per
+# weekday, one letter per nakshatram in NAKSHATRAS order (Aswini .. Ravathi):
+# S = Siddha, A = Amrutha (Amirtha), M = Marana. The article's worked example
+# (Thursday: Pooram -> Siddha, Uthiram -> Marana, Hastham -> Siddha) and
+# "Thiruvonam on Sunday is Amirtha" both hold, and mypanchang.com's published
+# Tamil Yoga matches this chart on 176 of 182 days checked (see
+# TestTamilYogamChart); drikpanchang.com and prokerala.com publish values from
+# different tables, so their Tamil Yogam is kept only as a reference.
+TAMIL_YOGAM_CHART = {
+    "Sunday":    "SSSSSSSSSMSAASSMMMASAAMSSAA",
+    "Monday":    "SSMAASASSMSSSSAMSSSSMASSMSS",
+    "Tuesday":   "SSSASMSSSSSASSSMSSASSSSMMAS",
+    "Wednesday": "MSASSSSSSSAAMSSSSSMAASMSAMS",
+    "Thursday":  "ASMMMMAASASMSSASSSSSSSSMSSS",
+    "Friday":    "ASSMSSSMMMSSASSSSMASSMSSSSA",
+    "Saturday":  "SSAASSSSMAMMMMASSSSSSSSAMSM",
+}
+_TAMIL_YOGAM_CODES = {"S": "Siddha", "A": "Amrutha", "M": "Marana"}
+TAMIL_YOGAM_METHOD = "Pambu (Vakya) Panchangam weekday x nakshatram chart"
+DAY_MODEL = "Vedic day: sunrise to the next sunrise"
+
+
+def tamil_yogam_for(weekday, nakshatram):
+    """Tamil Yogam ("Siddha" / "Amrutha" / "Marana") for a Vedic weekday and nakshatram.
+
+    `weekday` is a weekday name (any case) or a Python weekday number
+    (Monday=0); `nakshatram` is any name resolve_nakshatra_index accepts, or a
+    0-based index into NAKSHATRAS. The weekday must be the *Vedic* weekday,
+    which runs sunrise to sunrise (so 3 AM on a Thursday is still Wednesday).
+    """
+    if isinstance(weekday, int):
+        weekday_name = _WEEKDAY_NAMES[weekday]
+    else:
+        weekday_name = _normalize_weekday_name(weekday)
+    index = nakshatram if isinstance(nakshatram, int) else resolve_nakshatra_index(nakshatram)
+    return _TAMIL_YOGAM_CODES[TAMIL_YOGAM_CHART[weekday_name][index]]
+
+
+def _vedic_day_bounds(day_result):
+    """(sunrise, next sunrise) of the Vedic day starting on day_result's date, in minutes past its local midnight."""
+    sunrise = day_result["_sunrise_minutes"]
+    next_sunrise = day_result.get("_next_sunrise_minutes", sunrise)
+    return sunrise, _MINUTES_PER_DAY + next_sunrise
+
+
 def _favorable_windows(day_result, favorable_indices):
-    """Return merged (start_minute, end_minute) windows, within the day, that are favorable.
+    """Favorable (start, end) windows of the Vedic day that starts at sunrise on day_result's date.
 
-    Builds the timeline by cutting the day at every cutoff time present in
-    either segment list (nakshatram's and Tamil Yogam's transitions need not
-    coincide, and either can have more than one same-day transition), then
-    checks favorability of the nakshatra+yogam pair active in each resulting
-    slice, merging adjacent favorable slices together.
+    Minutes are counted from that date's local midnight, so the day spans
+    [sunrise, 1440 + next sunrise) and a window can run past midnight (> 1440)
+    up to the next sunrise. A stretch is favorable when its nakshatram is in
+    `favorable_indices` AND the Tamil Yogam for (this Vedic weekday, that
+    nakshatram) -- from TAMIL_YOGAM_CHART, not the site's published value --
+    is Siddha or Amrutha. The Tamil Yogam can only change when the nakshatram
+    does (or at sunrise, when the weekday does), so walking the nakshatram
+    timeline is enough. Adjacent favorable stretches are merged.
     """
-    nak_segments = day_result["_nakshatram_segments"]
-    yogam_segments = day_result["_tam_yogam_segments"]
-    boundaries = sorted(
-        {
-            _cutoff_to_minutes(cutoff)
-            for segments in (nak_segments, yogam_segments)
-            for _, cutoff in segments
-            if cutoff is not None
-        }
-    )
-    edges = [0, *boundaries, _MINUTES_PER_DAY]
-
+    day_start, day_end = _vedic_day_bounds(day_result)
+    weekday = day_result["date"].weekday()
     windows = []
-    for start, end in zip(edges, edges[1:]):
-        nak_idx = _value_at(nak_segments, start)
-        yogam = _value_at(yogam_segments, start)
-        if nak_idx in favorable_indices and _is_favorable_yogam(yogam):
-            windows.append((start, end))
+    start = day_start
+    for index, end in day_result["_nakshatram_timeline"]:
+        segment_end = day_end if end is None else min(end, day_end)
+        if segment_end <= start:
+            continue
+        if index in favorable_indices and _is_favorable_yogam(tamil_yogam_for(weekday, index)):
+            if windows and windows[-1][1] == start:
+                windows[-1] = (windows[-1][0], segment_end)
+            else:
+                windows.append((start, segment_end))
+        start = segment_end
+        if start >= day_end:
+            break
+    return windows
 
-    merged = []
-    for start, end in windows:
-        if merged and merged[-1][1] == start:
-            merged[-1] = (merged[-1][0], end)
-        else:
-            merged.append((start, end))
-    return merged
 
-
-def _next_day_continuation_label(day_result):
-    """If the day's trailing nakshatram/yogam segment is known to hold into tomorrow
-    until a specific time, return "{next day's date} {time}"; else None.
-
-    Both dimensions can each carry such a fact independently (see
-    _parse_nakshathram_segments / _parse_tamil_yoga_segments); when both are
-    known, the earlier of the two is reported, since that's the point at
-    which today's combined favorable state is first at risk of changing.
-    """
-    known_cutoffs = [
-        c
-        for c in (
-            day_result["_nakshatram_next_day_continuation"],
-            day_result["_tam_yogam_next_day_continuation"],
-        )
-        if c is not None
-    ]
-    if not known_cutoffs:
-        return None
-    earliest_cutoff = min(known_cutoffs, key=_cutoff_to_minutes)
-    next_day = day_result["date"] + timedelta(days=1)
-    return f"{_format_day_label(next_day)} {earliest_cutoff}"
+def _format_minute_of_day(day_date, minutes):
+    """Minutes past `day_date`'s midnight -> "07:23 AM", or "September 17, 2026 07:23 AM" once past midnight."""
+    if minutes < _MINUTES_PER_DAY:
+        return _minutes_to_cutoff(minutes)
+    return f"{_format_day_label(day_date + timedelta(days=1))} {_minutes_to_cutoff(minutes - _MINUTES_PER_DAY)}"
 
 
 def _build_favorable_entry(day_result, favorable_indices):
-    """Combine a day's favorable windows into one display string, or None if not favorable at all."""
+    """Describe a Vedic day's favorable windows as one display string, or None if there are none.
+
+    The day runs from sunrise to the next sunrise, so:
+      "Entire day"                         sunrise -> next sunrise
+      "Entire day (favorable until D T)"   sunrise -> T on the next date D (after midnight)
+      "until T"                            sunrise -> T the same date
+      "from T onwards"                     T -> next sunrise
+      "from T onwards (favorable until D T2)"  T -> T2 on the next date D
+      "from T to T2"                       both on the same date
+    Several windows are joined by "; ".
+    """
     windows = _favorable_windows(day_result, favorable_indices)
     if not windows:
         return None
-
-    label = _format_day_label(day_result["date"])
-    continuation = _next_day_continuation_label(day_result)
-
-    if windows == [(0, _MINUTES_PER_DAY)]:
-        if continuation:
-            return f"{label} - Entire day (favorable until {continuation})"
-        return f"{label} - Entire day"
+    day_date = day_result["date"]
+    day_start, day_end = _vedic_day_bounds(day_result)
 
     parts = []
     for start, end in windows:
-        if start == 0:
-            parts.append(f"until {_minutes_to_cutoff(end)}")
-        elif end == _MINUTES_PER_DAY:
-            if continuation:
-                parts.append(f"from {_minutes_to_cutoff(start)} onwards (favorable until {continuation})")
-            else:
-                parts.append(f"from {_minutes_to_cutoff(start)} onwards")
+        ends_next_date = end > _MINUTES_PER_DAY and end < day_end
+        continuation = f" (favorable until {_format_minute_of_day(day_date, end)})" if ends_next_date else ""
+        if start == day_start and end == day_end:
+            parts.append("Entire day")
+        elif start == day_start:
+            parts.append(f"Entire day{continuation}" if ends_next_date else f"until {_minutes_to_cutoff(end)}")
+        elif end == day_end:
+            parts.append(f"from {_format_minute_of_day(day_date, start)} onwards")
+        elif start < _MINUTES_PER_DAY and ends_next_date:
+            parts.append(f"from {_minutes_to_cutoff(start)} onwards{continuation}")
         else:
-            parts.append(f"from {_minutes_to_cutoff(start)} to {_minutes_to_cutoff(end)}")
-    return f"{label} - " + "; ".join(parts)
+            parts.append(f"from {_format_minute_of_day(day_date, start)} to {_format_minute_of_day(day_date, end)}")
+    return f"{_format_day_label(day_date)} - " + "; ".join(parts)
+
+
+def _finalize_timeline(raw, sunrise_minutes):
+    """Normalize a raw [(nakshatram index, end minute or None)] list for the Vedic day starting at sunrise.
+
+    Drops entries that ended at/before sunrise, stops at the first open-ended
+    entry, and -- when every listed nakshatram has a known end -- appends the
+    one that follows (nakshatrams always progress consecutively), open-ended.
+    """
+    timeline = []
+    for index, end in raw:
+        if end is not None and end <= sunrise_minutes:
+            continue
+        timeline.append((index, end))
+        if end is None:
+            return timeline
+    if not timeline:
+        raise ValueError("empty nakshatram timeline")
+    timeline.append(((timeline[-1][0] + 1) % NUM_NAKSHATRAS, None))
+    return timeline
+
+
+def _parse_drik_nakshatram_timeline(elements, query_date):
+    """Every "Nakshathram" <p> as (index, end minute past query_date's midnight), for the Vedic day.
+
+    drikpanchang lists each nakshatram that ends within the Vedic day (sunrise
+    to next sunrise) with its "upto" time -- a trailing date marker means the
+    next calendar day (+1440) -- and leaves the one still running at the next
+    sunrise implicit (derived from the last entry's "next X (N)" title).
+    """
+    raw = []
+    for element in elements:
+        value_span = element.select_one(".dpElementValue")
+        next_index_1based = _extract_next_index(value_span.find("a"))
+        if next_index_1based is None:
+            raise ValueError(f"Could not determine next-nakshatra index for {query_date}")
+        index = (next_index_1based - 2) % NUM_NAKSHATRAS
+        cutoff = _extract_cutoff_time(value_span)
+        if cutoff is None:
+            raw.append((index, None))
+            break
+        end = _cutoff_to_minutes(cutoff)
+        if _crosses_into_next_calendar_day(value_span, query_date):
+            end += _MINUTES_PER_DAY
+        raw.append((index, end))
+    return raw
+
+
+def _parse_drik_sunrise_minutes(wrapper, query_date):
+    for element in _find_elements_by_key(wrapper, "Sunrise"):
+        cutoff = _extract_cutoff_time(element.select_one(".dpElementValue"))
+        if cutoff is not None:
+            return _cutoff_to_minutes(cutoff)
+    raise ValueError(f"Could not find sunrise time for {query_date}")
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +946,23 @@ def _parse_prokerala_nakshatram_segments(block, query_date):
     return segments, None
 
 
+def _parse_prokerala_nakshatram_timeline(block, query_date):
+    """Every listed nakshatram as (index, end minute past query_date's midnight); ends may exceed 1440."""
+    day_start = datetime.combine(query_date, datetime.min.time())
+    raw = []
+    for item in block.select("li"):
+        link = item.find("a", href=_PROKERALA_SLUG_RE)
+        match = _PROKERALA_RANGE_RE.search(item.get_text(" ", strip=True))
+        if link is None or match is None:
+            continue
+        slug = _PROKERALA_SLUG_RE.search(link["href"]).group(1)
+        if slug not in _PROKERALA_SLUG_TO_INDEX:
+            raise ValueError(f"Unknown prokerala nakshatra slug {slug!r} for {query_date}")
+        end = _prokerala_datetime(match.group(4), match.group(5), match.group(6), query_date)
+        raw.append((_PROKERALA_SLUG_TO_INDEX[slug], int((end - day_start).total_seconds() // 60)))
+    return raw
+
+
 def _parse_prokerala_tamil_yoga_segments(block, query_date, sunrise_minutes):
     """Turn prokerala's "Tamil Yogam" list into (name, cutoff) segments for query_date.
 
@@ -893,11 +1005,16 @@ def _parse_prokerala_day_panchang(html, query_date):
         raise ValueError(f"Could not find Nakshatram/Tamil Yogam blocks in prokerala page for {query_date}")
 
     nak_segments, nak_next_day_continuation = _parse_prokerala_nakshatram_segments(nak_block, query_date)
+    sunrise_minutes = _prokerala_sunrise_minutes(soup, query_date)
     yogam_segments, yogam_next_day_continuation = _parse_prokerala_tamil_yoga_segments(
-        yogam_block, query_date, _prokerala_sunrise_minutes(soup, query_date)
+        yogam_block, query_date, sunrise_minutes
     )
     return {
         "date": query_date,
+        "_sunrise_minutes": sunrise_minutes,
+        "_nakshatram_timeline": _finalize_timeline(
+            _parse_prokerala_nakshatram_timeline(nak_block, query_date), sunrise_minutes
+        ),
         "primary_nakshatram_for_the_day": NAKSHATRAS[nak_segments[0][0]]["Tamil"],
         "secondary_nakshatram_of_the_day": (
             NAKSHATRAS[nak_segments[1][0]]["Tamil"] if len(nak_segments) > 1 else None
@@ -970,6 +1087,22 @@ _SOURCE_FETCHERS = {
 }
 
 
+def _utc_offset_change_minutes(geoname_id, day_date):
+    """How far local clocks move between day_date and the next day (e.g. -60 when DST ends).
+
+    The next sunrise is taken to be at the same wall-clock time as this one,
+    adjusted by this; sunrise itself drifts only a minute or two a day.
+    """
+    try:
+        tz = _city_timezone(geoname_id)
+    except ValueError:
+        return 0
+    noon = datetime.combine(day_date, datetime.min.time()) + timedelta(hours=12)
+    before = noon.replace(tzinfo=tz).utcoffset()
+    after = (noon + timedelta(days=1)).replace(tzinfo=tz).utcoffset()
+    return int((after - before).total_seconds() // 60)
+
+
 def fetch_day_panchang(
     geoname_id,
     day_date,
@@ -1026,6 +1159,9 @@ def fetch_day_panchang(
             failures.append(f"{source}: {exc}")
             continue
         day_result["source"] = source
+        day_result["_next_sunrise_minutes"] = day_result["_sunrise_minutes"] + _utc_offset_change_minutes(
+            geoname_id, day_date
+        )
         return day_result
     raise PanchangSourceBlockedError(
         f"No panchang source could provide {day_date} for geoname-id {geoname_id}. " + " | ".join(failures)
@@ -1080,6 +1216,7 @@ def _format_month_file_contents(person, input_nakshatram, input_city_name, month
         f"Nakshatram: {input_nakshatram}",
         f"City: {input_city_name}",
         f"Month: {month_entry['month']} {month_entry['year']}",
+        f"Days run from sunrise to the next sunrise; Tamil Yogam per the {TAMIL_YOGAM_METHOD}.",
         "-" * 60,
     ]
     body = month_entry["fav_days_with_ts"] or ["No favorable days found."]
@@ -1105,6 +1242,13 @@ def _split_favorable_entry_into_row(entry):
     """
     date_part, _, prediction_part = entry.partition(" - ")
     return {"date": date_part, "prediction": prediction_part}
+
+
+def _with_sunrise(row, sunrise_by_date):
+    """Add the day's sunrise (start of its Vedic day) to a {date, prediction} row, when known."""
+    if row["date"] in sunrise_by_date:
+        row["sunrise"] = sunrise_by_date[row["date"]]
+    return row
 
 
 def collate_and_save_predictions(
@@ -1133,7 +1277,8 @@ def collate_and_save_predictions(
             "month": month_entry["month"],
             "year": month_entry["year"],
             "favorable_days": [
-                _split_favorable_entry_into_row(entry) for entry in month_entry["fav_days_with_ts"]
+                _with_sunrise(_split_favorable_entry_into_row(entry), month_entry.get("sunrise_by_date", {}))
+                for entry in month_entry["fav_days_with_ts"]
             ],
         }
         for month_entry in favorable_days_with_ts
@@ -1145,6 +1290,8 @@ def collate_and_save_predictions(
         "input_city_name": input_city_name,
         "starting_month_year": starting_month_year,
         "forward_looking_months": forward_looking_months,
+        "tamil_yogam_method": TAMIL_YOGAM_METHOD,
+        "day_model": DAY_MODEL,
         "months": months_table,
     }
     if data_sources is not None:
@@ -1252,6 +1399,7 @@ def fetch_favorable_month_days(
     favorable_days_with_ts = []
     for year, month in _forward_looking_months(start_year, start_month, forward_looking_months):
         month_entries = []
+        sunrise_by_date = {}
         for day_date in _dates_in_month_for_weekdays(year, month, weekday_names):
             day_result = fetch_day_panchang(
                 geoname_id,
@@ -1269,11 +1417,13 @@ def fetch_favorable_month_days(
             entry = _build_favorable_entry(day_result, favorable_indices)
             if entry is not None:
                 month_entries.append(entry)
+                sunrise_by_date[_format_day_label(day_date)] = _minutes_to_cutoff(day_result["_sunrise_minutes"])
 
         month_result = {
             "month": calendar.month_name[month],
             "year": year,
             "fav_days_with_ts": month_entries,
+            "sunrise_by_date": sunrise_by_date,
         }
         file_path = _write_month_file(person, input_nakshatram, input_city_name, output_dir, month_result)
         month_result["output_file"] = str(file_path)
@@ -1304,27 +1454,8 @@ def fetch_favorable_month_days(
 
 
 def _favorable_intervals(day_result, favorable_indices):
-    """Favorable windows for one day, as (start, end) minute offsets from that date's local midnight.
-
-    The same windows _build_favorable_entry renders as text, in machine-usable
-    form: a window that runs up to midnight and whose nakshatram/yogam state
-    is known to hold into the next calendar day (the "(favorable until ...)"
-    suffix -- see _next_day_continuation_label) is extended past 1440 to that
-    next-day cutoff.
-    """
-    windows = _favorable_windows(day_result, favorable_indices)
-    known_cutoffs = [
-        c
-        for c in (
-            day_result["_nakshatram_next_day_continuation"],
-            day_result["_tam_yogam_next_day_continuation"],
-        )
-        if c is not None
-    ]
-    if windows and windows[-1][1] == _MINUTES_PER_DAY and known_cutoffs:
-        next_day_minutes = min(_cutoff_to_minutes(c) for c in known_cutoffs)
-        windows[-1] = (windows[-1][0], _MINUTES_PER_DAY + next_day_minutes)
-    return windows
+    """Favorable windows as (start, end) minutes past the date's local midnight (see _favorable_windows)."""
+    return _favorable_windows(day_result, favorable_indices)
 
 
 def _city_timezone(geoname_id):
@@ -1342,11 +1473,21 @@ def _local_minutes_to_utc(day_date, minutes, tz):
     return local_wall_clock.replace(tzinfo=tz).astimezone(timezone.utc)
 
 
-def _merge_intervals(intervals):
-    """Sort and merge overlapping/touching (start, end) intervals."""
+# Consecutive favorable Vedic days meet at a sunrise that's estimated from the
+# previous one (same clock time), so they can be a minute or two apart.
+_SUNRISE_SEAM_TOLERANCE = timedelta(minutes=2)
+
+
+def _merge_intervals(intervals, tolerance=None):
+    """Sort and merge overlapping/touching (start, end) intervals.
+
+    With `tolerance` (same type as end - start, e.g. a timedelta), gaps up to
+    that size are closed too -- used to join consecutive Vedic days, whose
+    boundary (the next sunrise) is estimated to within a minute or two.
+    """
     merged = []
     for start, end in sorted(intervals):
-        if merged and start <= merged[-1][1]:
+        if merged and (start <= merged[-1][1] or (tolerance is not None and start - merged[-1][1] <= tolerance)):
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
             merged.append((start, end))
@@ -1510,7 +1651,7 @@ def find_common_favorable_times(
                 fallback_dates.append(f"{member['person']}: {day_date.isoformat()}")
             for start, end in _favorable_intervals(day_result, favorable_indices):
                 intervals.append((_local_minutes_to_utc(day_date, start, tz), _local_minutes_to_utc(day_date, end, tz)))
-        intervals = _merge_intervals(intervals)
+        intervals = _merge_intervals(intervals, tolerance=_SUNRISE_SEAM_TOLERANCE)
         common = intervals if common is None else _intersect_intervals(common, intervals)
 
     common_indices = set.intersection(*(set(favorable_nakshatram_indices(m["input_nakshatram"])) for m in members))
@@ -1552,6 +1693,8 @@ def find_common_favorable_times(
             for member in members
         ],
         "common_favorable_nakshatrams": [NAKSHATRAS[i]["Tamil"] for i in sorted(common_indices)],
+        "tamil_yogam_method": TAMIL_YOGAM_METHOD,
+        "day_model": DAY_MODEL,
         "data_sources": {"fallback_dates": fallback_dates},
         "months": [
             {"month": calendar.month_name[month], "year": year, "common_windows": month_buckets[(year, month)]}
@@ -1797,6 +1940,7 @@ def main(argv=None):
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    print(f"(Days run from sunrise to the next sunrise; Tamil Yogam per the {TAMIL_YOGAM_METHOD}.)")
     for month_result in results:
         print(f"{month_result['month']} {month_result['year']}:")
         if month_result["fav_days_with_ts"]:

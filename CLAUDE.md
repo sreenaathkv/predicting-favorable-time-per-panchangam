@@ -17,7 +17,7 @@ update. Personal results (`*_output_dir/`), `panchang_cache/`, `.venv/` and
 implementation is done and complete:
 `plugins/panchangam/skills/predicting-favorable-time-per-panchangam/scripts/panchangam_utils.py`
 (1000+ lines) satisfies the 1800+-line test suite in
-`scripts/test_panchangam_utils.py` (184 tests, all passing), the
+`scripts/test_panchangam_utils.py` (195 tests, all passing), the
 `scripts/tests_fixtures/` HTML fixtures it loads exist, and
 `scripts/requirements.txt` pins dependencies. `scripts/prompt.md` is a
 running log of every prompt that drove the implementation and its bug
@@ -112,6 +112,12 @@ page — don't treat a skip there as a failure.
    requested weekday across the forward-looking window fetches (or reads
    from an on-disk `panchang_cache/`) that day's drikpanchang HTML and
    determines favorability.
+
+   **Tamil Yogam is computed, not scraped**: `TAMIL_YOGAM_CHART` (the Pambu
+   / Vakya Panchangam weekday x nakshatram chart) decides Siddha/Amrutha/Marana,
+   and each favorable weekday is a *Vedic* day (sunrise to next sunrise); the
+   sites only supply nakshatram timings and sunrise (see `scripts/CLAUDE.md`,
+   last section, and `references/domain_knowledge.md`).
 
    **The core subtlety of this whole skill**: a day's favorability requires
    intersecting three independently-timed signals — the day-of-week match,

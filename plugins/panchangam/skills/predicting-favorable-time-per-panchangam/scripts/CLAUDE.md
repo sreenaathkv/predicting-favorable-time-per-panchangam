@@ -105,3 +105,24 @@ Tests: `TestGroupIntervalHelpers`, `TestFindCommonFavorableTimes` (offline, over
   - Tamil Yogam comes from `.panchang-data-tamil-yoga`, **not** `.panchang-data-yoga` (the nithya yogam). Its cutoffs have no date: a cutoff before the page's sunrise is on the next day.
   - Unlike drikpanchang, prokerala always knows when the day's last nakshatram ends, so its `_nakshatram_next_day_continuation` is often set where drikpanchang's is `None`.
 - **Known disagreement:** the sites use different weekday × nakshatram Tamil Yogam tables on some days. `TestSourceAgreement` pins these in `KNOWN_TAMIL_YOGAM_DISAGREEMENTS` (4 of 21 captured days, each flipping favorability), and asserts that nakshatram segments agree on all days. Fixtures are in `tests_fixtures/prokerala/{gid}_{YYYY-MM-DD}.html`.
+
+## Tamil Yogam is computed from the Pambu chart; days are Vedic days (sunrise to sunrise)
+
+This supersedes the older notes in this file about favorability coming from the *published* Tamil Yogam segments.
+
+- **The chart:** `TAMIL_YOGAM_CHART` is the Pambu (Vakya) Panchangam weekday × nakshatram chart, transcribed from mahastro.com: 7 rows of 27 letters, S/A/M. `tamil_yogam_for(weekday, nakshatram)` looks up a cell.
+  - Sites publish Tamil Yogam from differing tables. drikpanchang matches the chart only about 46% of the time, prokerala about 38%, and mypanchang about 97% (it differs on 3 cells).
+  - The parsed `_tam_yogam_segments` are therefore **reference only**: they are pinned in `TestTamilYogamChart` and `TestSourceAgreement`, and never used for favorability.
+- **Day model:** each favorable weekday date D is evaluated as the Vedic day from `_sunrise_minutes` to the next sunrise, `1440 + _next_sunrise_minutes`.
+  - The next sunrise is taken at the same wall-clock time as D's, shifted by any UTC-offset change overnight (`_utc_offset_change_minutes`, set in `fetch_day_panchang`), which handles DST.
+  - Windows are minutes past D's midnight and may exceed 1440.
+- **Nakshatram timeline:** both parsers produce `_nakshatram_timeline`, a list of `(index, end minute or None)` for the Vedic day, via `_parse_drik_nakshatram_timeline` / `_parse_prokerala_nakshatram_timeline` and `_finalize_timeline`.
+  - drikpanchang lists every nakshatram ending within the Vedic day; a trailing date marker means +1440. The one still running at the next sunrise is derived from the last entry's "next X (N)" title.
+- **Windows:** `_favorable_windows` walks the timeline, looking up `tamil_yogam_for(D's weekday, nakshatram)` for each stretch, and merges adjacent favorable stretches. `_build_favorable_entry` renders the result; see its docstring for the grammar.
+  - "Entire day" / "until T" now start at **sunrise**.
+  - A window can start after midnight, e.g. "from September 12, 2026 12:25 AM onwards".
+- **Outputs:** JSON rows carry `sunrise`, and the JSON has `tamil_yogam_method` and `day_model`.
+- **Group runs:** `find_common_favorable_times` merges each person's consecutive Vedic days across the estimated-sunrise seam, `_SUNRISE_SEAM_TOLERANCE` (2 min).
+- **Test fixtures:**
+  - `synthetic_never_favorable_for_uthiradam.html` (the whole day is the birth star) is the "contributes nothing" filler for tests.
+  - `tests_fixtures/mypanchang/*.html` are month tables, used as an independent check of the chart.

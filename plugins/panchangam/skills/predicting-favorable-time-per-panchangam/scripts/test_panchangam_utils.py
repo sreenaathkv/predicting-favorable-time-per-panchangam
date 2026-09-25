@@ -485,21 +485,26 @@ class TestParseDayPanchangFixtures(unittest.TestCase):
     def test_from_onwards_case(self):
         html = load_fixture("chennai_2026-01-03_from_onwards.html")
         result = pu._parse_day_panchang(html, date(2026, 1, 3))
-        # Thiruvaathirai (until 5:27 PM, Marana yogam) is not favorable for
-        # "Uthiradam" here since the yogam fails; Punarpoosam (after 5:27 PM)
-        # isn't a favorable nakshatra for "Uthiradam" either, so the day is
-        # not favorable at all for that input...
-        self.assertIsNone(pu._build_favorable_entry(result, favorable_nakshatram_indices("Uthiradam")))
-        # ...but Thiruvaathirai *is* favorable for "Bharani", and it has
-        # Marana (not favorable) until 5:27 PM, Siddha (favorable) after.
+        # Saturday, Jan 3: Thiruvaathirai until 05:27 PM, then Punarpoosam. Per
+        # TAMIL_YOGAM_CHART both are Siddha on a Saturday (mypanchang.com: "Siddha"
+        # all day), so favorability follows the nakshatram alone. (drikpanchang
+        # publishes Marana until 05:27 PM from its own, different table.)
+        self.assertEqual(
+            pu._build_favorable_entry(result, favorable_nakshatram_indices("Uthiradam")),
+            "January 3, 2026 - until 05:27 PM",  # Thiruvaathirai is favorable for Uthiradam
+        )
         entry = pu._build_favorable_entry(result, favorable_nakshatram_indices("Bharani"))
-        self.assertEqual(entry, "January 3, 2026 - from 05:27 PM onwards")
+        self.assertEqual(entry, "January 3, 2026 - from 05:27 PM onwards")  # Punarpoosam is, for Bharani
 
     def test_until_case(self):
         html = load_fixture("chennai_2026-01-06_until.html")
         result = pu._parse_day_panchang(html, date(2026, 1, 6))
         entry = pu._build_favorable_entry(result, favorable_nakshatram_indices("Bharani"))
-        self.assertEqual(entry, "January 6, 2026 - until 12:17 PM")
+        # Aayilyam (until 12:17 PM) and then Makam are both favorable for Bharani,
+        # and both are Siddha on a Tuesday per TAMIL_YOGAM_CHART (mypanchang.com
+        # agrees: "Siddha" all day) -- so the whole Vedic day qualifies. (drikpanchang's
+        # own table calls the Makam part Marana, which used to cut this at 12:17 PM.)
+        self.assertEqual(entry, "January 6, 2026 - Entire day")
 
     def test_two_nakshatram_segments_in_one_day(self):
         # Real drikpanchang data can show 2 same-day Nakshathram transitions.
@@ -524,22 +529,21 @@ class TestParseDayPanchangFixtures(unittest.TestCase):
         self.assertEqual(result["secondary_nakshatram_of_the_day"], "Thiruvonam")
         self.assertEqual(len(result["_tam_yogam_segments"]), 3)
         entry = pu._build_favorable_entry(result, favorable_nakshatram_indices("Bharani"))
-        self.assertEqual(entry, "February 15, 2026 - until 01:28 PM")
+        # drikpanchang publishes 3 Tamil Yogam segments here (Amrutha until 01:28 PM,
+        # then Marana), but per TAMIL_YOGAM_CHART Sunday + Uthiradam is Amrutha for the
+        # whole segment (mypanchang.com: "Amrita" all day), so favorability now
+        # follows the nakshatram alone: Uthiradam (favorable for Bharani) until 07:48 PM.
+        self.assertEqual(entry, "February 15, 2026 - until 07:48 PM")
 
     def test_multi_window_disjoint_favorable_ranges(self):
-        # Hand-crafted fixture: nakshatram is favorable and constant all day,
-        # but Tamil Yogam goes favorable -> unfavorable -> favorable, which
-        # must produce two separate ranges joined in one string. The
-        # nakshatram's own "upto" also crosses into the next day (Jan 2, 3:00
-        # AM), so the trailing range additionally reports that continuation.
+        # Hand-crafted fixture (see its header comment): Pooram (favorable) until
+        # 10:00 AM, Uthiram (not favorable) until 03:00 AM the next calendar day,
+        # then Hastham (favorable) until the next sunrise -- two separate ranges,
+        # the second starting after midnight but still within the Vedic Thursday.
         html = load_fixture("synthetic_multi_window.html")
         result = pu._parse_day_panchang(html, date(2026, 1, 1))
         entry = pu._build_favorable_entry(result, favorable_nakshatram_indices("Uthiradam"))
-        self.assertEqual(
-            entry,
-            "January 1, 2026 - until 10:00 AM; "
-            "from 06:00 PM onwards (favorable until January 2, 2026 03:00 AM)",
-        )
+        self.assertEqual(entry, "January 1, 2026 - until 10:00 AM; from January 2, 2026 03:00 AM onwards")
 
     def test_entire_day_crossing_into_next_day_reports_continuation(self):
         # Regression test for a real user-reported bug: for Sunnyvale, CA on
@@ -609,7 +613,7 @@ class TestFetchFavorableMonthDaysIntegration(unittest.TestCase):
         # have specific fixtures registered; the rest fall back to a fixture
         # that's not favorable for "Uthiradam" (or any nakshatram, since its
         # Tamil Yogam is Marana all day) so they don't contribute an entry.
-        none_html = load_fixture("chennai_2026-01-01_none.html")
+        none_html = load_fixture("synthetic_never_favorable_for_uthiradam.html")
         return _FixtureSession(
             html_by_date={
                 "03/01/2026": load_fixture("chennai_2026-01-03_from_onwards.html"),
@@ -643,7 +647,10 @@ class TestFetchFavorableMonthDaysIntegration(unittest.TestCase):
         self.assertEqual(
             result[0]["fav_days_with_ts"],
             [
-                "January 17, 2026 - from 08:12 AM onwards",
+                # Thiruvaathirai (favorable) until 05:27 PM; Saturday -> Siddha.
+                "January 3, 2026 - until 05:27 PM",
+                # Moolam then Pooraadam, both favorable and both Siddha on a Saturday.
+                "January 17, 2026 - Entire day",
             ],
         )
         # 5 Saturdays in January 2026: 3, 10, 17, 24, 31.
@@ -652,7 +659,7 @@ class TestFetchFavorableMonthDaysIntegration(unittest.TestCase):
     def test_forward_looking_months_count_matches_request(self):
         import tempfile
 
-        none_html = load_fixture("chennai_2026-01-01_none.html")
+        none_html = load_fixture("synthetic_never_favorable_for_uthiradam.html")
         session = _FixtureSession(html_by_date={}, default_html=none_html)
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = fetch_favorable_month_days(
@@ -678,7 +685,7 @@ class TestFetchFavorableMonthDaysIntegration(unittest.TestCase):
     def test_default_forward_looking_months_is_12(self):
         import tempfile
 
-        none_html = load_fixture("chennai_2026-01-01_none.html")
+        none_html = load_fixture("synthetic_never_favorable_for_uthiradam.html")
         session = _FixtureSession(html_by_date={}, default_html=none_html)
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = fetch_favorable_month_days(
@@ -784,7 +791,7 @@ class TestFetchFavorableMonthDaysIntegration(unittest.TestCase):
     def test_ambiguous_city_resolved_via_qualifier(self):
         import tempfile
 
-        none_html = load_fixture("chennai_2026-01-01_none.html")
+        none_html = load_fixture("synthetic_never_favorable_for_uthiradam.html")
         session = _FixtureSession(html_by_date={}, default_html=none_html)
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = fetch_favorable_month_days(
@@ -804,7 +811,7 @@ class TestFetchFavorableMonthDaysIntegration(unittest.TestCase):
     def test_ambiguous_city_resolved_via_chooser(self):
         import tempfile
 
-        none_html = load_fixture("chennai_2026-01-01_none.html")
+        none_html = load_fixture("synthetic_never_favorable_for_uthiradam.html")
         session = _FixtureSession(html_by_date={}, default_html=none_html)
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = fetch_favorable_month_days(
@@ -890,7 +897,7 @@ class TestSlugifyCityName(unittest.TestCase):
 class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
     def _empty_month_session(self):
         return _FixtureSession(
-            html_by_date={}, default_html=load_fixture("chennai_2026-01-01_none.html")
+            html_by_date={}, default_html=load_fixture("synthetic_never_favorable_for_uthiradam.html")
         )
 
     def test_params_after_forward_looking_months_are_keyword_only(self):
@@ -1064,7 +1071,7 @@ class TestFetchFavorableMonthDaysOutputFiles(unittest.TestCase):
 
         session = _FixtureSession(
             html_by_date={"03/01/2026": load_fixture("chennai_2026-01-03_from_onwards.html")},
-            default_html=load_fixture("chennai_2026-01-01_none.html"),
+            default_html=load_fixture("synthetic_never_favorable_for_uthiradam.html"),
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             fetch_favorable_month_days(
@@ -1410,7 +1417,7 @@ class TestFetchFavorableMonthDaysCollation(unittest.TestCase):
 
     def _empty_month_session(self):
         return _FixtureSession(
-            html_by_date={}, default_html=load_fixture("chennai_2026-01-01_none.html")
+            html_by_date={}, default_html=load_fixture("synthetic_never_favorable_for_uthiradam.html")
         )
 
     def test_consolidated_file_created_alongside_monthly_files(self):
@@ -1449,12 +1456,12 @@ class TestFetchFavorableMonthDaysCollation(unittest.TestCase):
 
         session = _FixtureSession(
             html_by_date={"03/01/2026": load_fixture("chennai_2026-01-03_from_onwards.html")},
-            default_html=load_fixture("chennai_2026-01-01_none.html"),
+            default_html=load_fixture("synthetic_never_favorable_for_uthiradam.html"),
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             fetch_favorable_month_days(
                 ["Saturday"],
-                "Bharani",
+                "Uthiradam",  # the filler page is never favorable for Uthiradam
                 "Chennai",
                 "January 2026",
                 forward_looking_months=1,
@@ -1469,7 +1476,7 @@ class TestFetchFavorableMonthDaysCollation(unittest.TestCase):
 
         self.assertEqual(
             data["months"][0]["favorable_days"],
-            [{"date": "January 3, 2026", "prediction": "from 05:27 PM onwards"}],
+            [{"date": "January 3, 2026", "prediction": "until 05:27 PM", "sunrise": "06:32 AM"}],
         )
 
 
@@ -1540,22 +1547,29 @@ class TestSunnyvaleSeptember2026Regression(unittest.TestCase):
         self.assertEqual(
             result[0]["fav_days_with_ts"],
             [
-                "September 4, 2026 - until 10:34 AM",
+                # Tamil Yogam from TAMIL_YOGAM_CHART; every value below also matches
+                # mypanchang.com's published Tamil Yoga for Sunnyvale on that day.
+                "September 2, 2026 - until 01:13 PM",  # Wed: Bharani = Siddha
+                # Sep 4 (Fri): Rohini = Marana, then Mrigasheersham (not favorable) -> none
+                "September 5, 2026 - from 09:00 AM onwards",  # Sat: Thiruvaathirai = Siddha
                 "September 7, 2026 - Entire day (favorable until September 8, 2026 04:09 AM)",
-                "September 9, 2026 - Entire day (favorable until September 10, 2026 01:34 AM)",
+                "September 9, 2026 - Entire day",  # Wed: Makam = Siddha, then Pooram = Amrutha
+                "September 11, 2026 - from September 12, 2026 12:25 AM onwards",  # Fri: Hastham = Amrutha
+                # Sep 12 (Sat): Hastham = Marana -> none
                 "September 14, 2026 - Entire day (favorable until September 15, 2026 02:51 AM)",
                 "September 16, 2026 - Entire day",
-                "September 18, 2026 - from 10:14 AM onwards",
-                "September 19, 2026 - from 01:13 PM onwards",
-                "September 21, 2026 - from 08:22 PM onwards",
-                "September 23, 2026 - from 10:05 PM onwards",
+                "September 18, 2026 - from 10:14 AM onwards",  # Fri: Kettai = Marana, then Moolam = Amrutha
+                "September 19, 2026 - Entire day",  # Sat: Moolam, then Pooraadam, both Siddha
+                "September 21, 2026 - from 06:36 PM onwards",  # Mon: Thiruvonam = Amrutha
+                "September 23, 2026 - from 10:05 PM onwards",  # Wed: Avittam = Marana, Sadayam = Siddha
                 "September 25, 2026 - from 11:02 PM onwards",
-                "September 28, 2026 - from 08:33 PM onwards",
+                "September 26, 2026 - until 10:38 PM",  # Sat: Uthirattathi = Siddha, then Ravathi
+                "September 28, 2026 - Entire day",  # Mon: Aswini, then Bharani, both Siddha
                 "September 30, 2026 - from 05:32 PM onwards",
             ],
         )
 
-    def test_september_2_is_not_favorable(self):
+    def test_september_2_is_favorable_only_until_0113_pm(self):
         # Previously wrongly reported as "from 01:13 PM onwards".
         result = fetch_favorable_month_days(
             ["Wednesday"],
@@ -1569,12 +1583,12 @@ class TestSunnyvaleSeptember2026Regression(unittest.TestCase):
             request_delay_seconds=0,
             session=self._session(),
         )
-        self.assertNotIn(
-            "September 2, 2026 - from 01:13 PM onwards", result[0]["fav_days_with_ts"]
-        )
-        self.assertFalse(any(entry.startswith("September 2,") for entry in result[0]["fav_days_with_ts"]))
+        # Bharani (favorable) until 01:13 PM is Siddha on a Wednesday per the chart.
+        # The originally reported bug was the *afternoon* being reported: Karthigai
+        # after 01:13 PM is not a favorable nakshatram.
+        self.assertIn("September 2, 2026 - until 01:13 PM", result[0]["fav_days_with_ts"])
 
-    def test_september_4_is_only_favorable_until_1034_am(self):
+    def test_september_4_is_not_favorable(self):
         # Previously wrongly reported as "Entire day".
         result = fetch_favorable_month_days(
             ["Friday"],
@@ -1588,9 +1602,11 @@ class TestSunnyvaleSeptember2026Regression(unittest.TestCase):
             request_delay_seconds=0,
             session=self._session(),
         )
-        self.assertIn("September 4, 2026 - until 10:34 AM", result[0]["fav_days_with_ts"])
+        # Per the chart, Friday + Rohini is Marana, and Mrigasheersham (after 10:34 AM)
+        # is not a favorable nakshatram -- so Sep 4 is not favorable at all.
+        self.assertFalse(any(entry.startswith("September 4,") for entry in result[0]["fav_days_with_ts"]))
 
-    def test_september_26_is_not_favorable(self):
+    def test_september_26_is_favorable_until_1038_pm(self):
         # Previously wrongly reported as "from 10:38 PM onwards".
         result = fetch_favorable_month_days(
             ["Saturday"],
@@ -1604,7 +1620,9 @@ class TestSunnyvaleSeptember2026Regression(unittest.TestCase):
             request_delay_seconds=0,
             session=self._session(),
         )
-        self.assertFalse(any(entry.startswith("September 26,") for entry in result[0]["fav_days_with_ts"]))
+        # Saturday + Uthirattathi is Siddha per the chart, so its stretch (until
+        # 10:38 PM) is favorable; Ravathi after that is not a favorable nakshatram.
+        self.assertIn("September 26, 2026 - until 10:38 PM", result[0]["fav_days_with_ts"])
 
 
 class TestFetchFavorableMonthDaysLiveSmoke(unittest.TestCase):
@@ -1924,6 +1942,10 @@ class TestGroupIntervalHelpers(unittest.TestCase):
     def test_merge_intervals_sorts_and_joins_touching_and_overlapping(self):
         self.assertEqual(pu._merge_intervals([(5, 8), (0, 2), (2, 3), (7, 10)]), [(0, 3), (5, 10)])
 
+    def test_merge_intervals_closes_small_gaps_with_tolerance(self):
+        self.assertEqual(pu._merge_intervals([(0, 10), (11, 20), (30, 40)], tolerance=2), [(0, 20), (30, 40)])
+        self.assertEqual(pu._merge_intervals([(0, 10), (11, 20)]), [(0, 10), (11, 20)])
+
     def test_intersect_intervals(self):
         a = [(0, 10), (20, 30), (40, 50)]
         b = [(5, 25), (45, 60)]
@@ -1970,7 +1992,8 @@ class TestGroupIntervalHelpers(unittest.TestCase):
             pu._build_favorable_entry(day_result, indices),
             "October 17, 2026 - Entire day (favorable until October 18, 2026 12:19 AM)",
         )
-        self.assertEqual(pu._favorable_intervals(day_result, indices), [(0, 24 * 60 + 19)])
+        # Sunrise 07:18 AM until 12:19 AM the next calendar day (1440 + 19).
+        self.assertEqual(pu._favorable_intervals(day_result, indices), [(7 * 60 + 18, 24 * 60 + 19)])
 
     def test_parse_group_member_spec(self):
         self.assertEqual(
@@ -2006,7 +2029,7 @@ class TestFindCommonFavorableTimes(unittest.TestCase):
             html_by_date[f"{day}/{month}/{year}"] = path.read_text(encoding="utf-8")
         # Days just outside September (scanned as a cross-time-zone buffer) get an
         # all-day-Marana page, so they contribute nothing.
-        return _FixtureSession(html_by_date, default_html=load_fixture("chennai_2026-01-01_none.html"))
+        return _FixtureSession(html_by_date, default_html=load_fixture("synthetic_never_favorable_for_uthiradam.html"))
 
     def _run(self, people):
         return pu.find_common_favorable_times(
@@ -2046,13 +2069,15 @@ class TestFindCommonFavorableTimes(unittest.TestCase):
         self.assertEqual(
             spans,
             [
-                ("Wednesday, September 9, 2026 12:00 AM", "Thursday, September 10, 2026 01:34 AM"),
-                ("Wednesday, September 16, 2026 12:00 AM", "Thursday, September 17, 2026 12:00 AM"),
-                ("Wednesday, September 23, 2026 10:05 PM", "Thursday, September 24, 2026 12:00 AM"),
-                ("Wednesday, September 30, 2026 05:32 PM", "Thursday, October 1, 2026 12:00 AM"),
+                # Vedic days: sunrise to next sunrise (next sunrise taken at the same clock time).
+                ("Wednesday, September 2, 2026 06:40 AM", "Wednesday, September 2, 2026 01:13 PM"),
+                ("Wednesday, September 9, 2026 06:46 AM", "Thursday, September 10, 2026 06:46 AM"),
+                ("Wednesday, September 16, 2026 06:51 AM", "Thursday, September 17, 2026 06:51 AM"),
+                ("Wednesday, September 23, 2026 10:05 PM", "Thursday, September 24, 2026 06:57 AM"),
+                ("Wednesday, September 30, 2026 05:32 PM", "Thursday, October 1, 2026 07:03 AM"),
             ],
         )
-        self.assertEqual(windows[2]["duration_minutes"], 115)
+        self.assertEqual(windows[3]["duration_minutes"], 8 * 60 + 52)  # 10:05 PM -> 06:57 AM
         self.assertEqual(result["participants"][0]["timezone"], "America/Los_Angeles")
 
     def test_common_favorable_nakshatrams_is_the_intersection(self):
@@ -2282,19 +2307,34 @@ class TestSourceAgreement(unittest.TestCase):
                     _times_close(drik["_tam_yogam_next_day_continuation"], prokerala["_tam_yogam_next_day_continuation"])
                 )
 
-    def test_favorable_windows_agree_on_days_without_a_tamil_yogam_disagreement(self):
-        indices = favorable_nakshatram_indices("Uthiradam")
+    def test_favorable_windows_agree_on_every_day(self):
+        # The Tamil Yogam is computed from TAMIL_YOGAM_CHART, so the two sites'
+        # published Tamil Yogam disagreements above no longer matter: favorability
+        # depends only on nakshatram timings (which agree) and sunrise, which the
+        # sites compute a few minutes apart (e.g. 06:40 vs 06:44 AM in Sunnyvale).
+        for birth in ("Uthiradam", "Poosam", "Bharani"):
+            indices = favorable_nakshatram_indices(birth)
+            for day, drik_path, prokerala_path in _PAIRED_SOURCE_FIXTURES:
+                with self.subTest(birth=birth, day=day):
+                    drik, prokerala = self._both(day, drik_path, prokerala_path)
+                    drik_windows = pu._favorable_windows(drik, indices)
+                    prokerala_windows = pu._favorable_windows(prokerala, indices)
+                    self.assertEqual(len(drik_windows), len(prokerala_windows), (drik_windows, prokerala_windows))
+                    for (ds, de), (ps, pe) in zip(drik_windows, prokerala_windows):
+                        self.assertLessEqual(abs(ds - ps), 5)
+                        self.assertLessEqual(abs(de - pe), 5)
+
+    def test_nakshatram_timelines_match(self):
         for day, drik_path, prokerala_path in _PAIRED_SOURCE_FIXTURES:
-            if day in self.KNOWN_TAMIL_YOGAM_DISAGREEMENTS:
-                continue
             with self.subTest(day=day):
                 drik, prokerala = self._both(day, drik_path, prokerala_path)
-                drik_windows = pu._favorable_windows(drik, indices)
-                prokerala_windows = pu._favorable_windows(prokerala, indices)
-                self.assertEqual(len(drik_windows), len(prokerala_windows))
-                for (ds, de), (ps, pe) in zip(drik_windows, prokerala_windows):
-                    self.assertLessEqual(abs(ds - ps), 2)
-                    self.assertLessEqual(abs(de - pe), 2)
+                # prokerala lists every nakshatram with its end, so it may carry an
+                # extra entry past the Vedic day; compare what drikpanchang lists.
+                pairs = zip(drik["_nakshatram_timeline"], prokerala["_nakshatram_timeline"])
+                for (di, de), (pi, pe) in pairs:
+                    self.assertEqual(di, pi)
+                    if de is not None and pe is not None:
+                        self.assertLessEqual(abs(de - pe), 2)
 
 
 class _SourceRoutingSession:
@@ -2396,18 +2436,197 @@ class TestFetchDayPanchangFallback(unittest.TestCase):
         sources = result[0]["data_sources"]
         self.assertEqual(sources["days_by_source"], {pu.PROKERALA: 5})  # 5 Wednesdays in Sep 2026
         self.assertEqual(sources["fallback_dates"], ["2026-09-02", "2026-09-09", "2026-09-16", "2026-09-23", "2026-09-30"])
-        # Same windows drikpanchang gives for these Wednesdays, except Sep 9, where
-        # prokerala's Tamil Yogam is Marana (see TestSourceAgreement).
+        # The Tamil Yogam is computed from the chart, not taken from the site, so
+        # prokerala's nakshatram timings give exactly the drikpanchang-backed result
+        # for these Wednesdays (see TestSunnyvaleSeptember2026Regression).
         self.assertEqual(
             result[0]["fav_days_with_ts"],
             [
-                "September 16, 2026 - Entire day (favorable until September 17, 2026 07:23 AM)",
-                "September 23, 2026 - from 10:05 PM onwards (favorable until September 24, 2026 10:52 PM)",
-                "September 30, 2026 - from 05:32 PM onwards (favorable until October 1, 2026 03:57 PM)",
+                "September 2, 2026 - until 01:13 PM",
+                "September 9, 2026 - Entire day",
+                "September 16, 2026 - Entire day",
+                "September 23, 2026 - from 10:05 PM onwards",
+                "September 30, 2026 - from 05:32 PM onwards",
             ],
         )
         saved = json.loads(Path(result[0]["consolidated_output_file"]).read_text())
         self.assertEqual(saved["data_sources"]["days_by_source"], {pu.PROKERALA: 5})
+
+
+MYPANCHANG_FIXTURES_DIR = FIXTURES_DIR / "mypanchang"
+
+# mypanchang.com's spellings in its month tables, in NAKSHATRAS order.
+_MYPANCHANG_NAKSHATRAS = [
+    "ashvini", "bharani", "krittika", "rohini", "mrigashirsha", "aardra", "punarvasu", "pushya",
+    "aslesha", "magha", "p.phalguni", "u.phalguni", "hasta", "chitra", "svaati", "vishaakha",
+    "anuraadha", "jyeshtha", "mula", "p.shadha", "u.shada", "shravana", "dhanishta", "shatabhisha",
+    "p.bhadrapada", "u.bhadrapada", "revati",
+]
+
+
+def _mypanchang_noon_rows(path, year, month):
+    """{date: (nakshatram index at noon, published Tamil Yoga at noon)} from a mypanchang.com month table.
+
+    Test-only reader for https://www.mypanchang.com/caltable.php month tables
+    (columns "Nakshatra" and "Tamil Yoga"; times are 24-hour HH:MM:SS, "+" past
+    midnight). Only the value in force at 12:00 is taken, where the Vedic
+    weekday is unambiguous.
+    """
+    import re
+    from bs4 import BeautifulSoup
+
+    def minutes(text):
+        h, m, _ = text.rstrip("+").split(":")
+        return int(h) * 60 + int(m)
+
+    soup = BeautifulSoup(path.read_text(encoding="utf-8", errors="replace"), "lxml")
+    rows = soup.find_all("table")[1].find_all("tr")
+    header = [c.get_text(" ", strip=True) for c in rows[3].find_all(["th", "td"])]
+    col_date, col_nak, col_ty = header.index("Date"), header.index("Nakshatra"), header.index("Tamil Yoga")
+    out = {}
+    for row in rows[4:]:
+        cells = row.find_all(["th", "td"])
+        if len(cells) < len(header):
+            continue
+        day = date(year, month, int(cells[col_date].get_text(strip=True)))
+        nak = None
+        for name, end in re.findall(r"([A-Za-z.]+)\s+(full night|\d{1,2}:\d{2}:\d{2}\+?)", cells[col_nak].get_text(" ", strip=True)):
+            if name.lower() not in _MYPANCHANG_NAKSHATRAS:
+                continue
+            nak = _MYPANCHANG_NAKSHATRAS.index(name.lower())
+            if end == "full night" or minutes(end) > 12 * 60:
+                break
+            nak = (nak + 1) % pu.NUM_NAKSHATRAS
+        yogam = None
+        for part in [x.strip() for x in cells[col_ty].get_text(" ", strip=True).split(",") if x.strip()]:
+            bits = part.split()
+            yogam = {"amrita": "Amrutha"}.get(bits[0].lower(), bits[0].title())
+            if len(bits) == 1 or minutes(bits[1]) > 12 * 60:
+                break
+        out[day] = (nak, yogam)
+    return out
+
+
+def _gemini_method_2(weekday, nakshatram_index):
+    """Method 2 as described to us: count (inclusive) from the weekday's anchor star, mod 7.
+
+    Anchor stars: Sun Visaakam, Mon Pooraadam, Tue Avittam, Wed Ravathi, Thu Rohini,
+    Fri Poosam, Sat Uthiram. Remainder 4 = Amrita, 6 = Siddha, 3 = Marana (1, 2, 5, 0
+    are other yogas). Returns the remainder.
+    """
+    anchors = {6: "Visaakam", 0: "Pooraadam", 1: "Avittam", 2: "Ravathi", 3: "Rohini", 4: "Poosam", 5: "Uthiram"}
+    anchor = pu.resolve_nakshatra_index(anchors[weekday])
+    return ((nakshatram_index - anchor) % pu.NUM_NAKSHATRAS + 1) % 7
+
+
+class TestTamilYogamChart(unittest.TestCase):
+    """TAMIL_YOGAM_CHART / tamil_yogam_for: the Pambu (Vakya) Panchangam weekday x nakshatram chart."""
+
+    def test_chart_shape(self):
+        self.assertEqual(set(pu.TAMIL_YOGAM_CHART), set(pu._WEEKDAY_NAMES))
+        for weekday, row in pu.TAMIL_YOGAM_CHART.items():
+            with self.subTest(weekday=weekday):
+                self.assertEqual(len(row), pu.NUM_NAKSHATRAS)
+                self.assertTrue(set(row) <= {"S", "A", "M"})
+
+    def test_domain_knowledge_copy_of_the_chart_matches(self):
+        # references/domain_knowledge.md reproduces the chart for readers; keep it in sync.
+        import re
+
+        doc = (Path(__file__).resolve().parent.parent / "references" / "domain_knowledge.md").read_text(encoding="utf-8")
+        rows = re.findall(r"^\| (\d+)\. (\S+) \| ([SAM]) \| ([SAM]) \| ([SAM]) \| ([SAM]) \| ([SAM]) \| ([SAM]) \| ([SAM]) \|$", doc, re.M)
+        self.assertEqual(len(rows), pu.NUM_NAKSHATRAS)
+        days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        for number, name, *codes in rows:
+            index = int(number) - 1
+            self.assertEqual(pu.NAKSHATRAS[index]["Tamil"], name)
+            for day, code in zip(days, codes):
+                self.assertEqual(pu.TAMIL_YOGAM_CHART[day][index], code, (day, name))
+
+    def test_mahastro_worked_examples(self):
+        # "Whenever Thiruvonam (Sravana) Nakshatram falls on Sunday, it will be Amrita Yoga."
+        self.assertEqual(pu.tamil_yogam_for("Sunday", "Thiruvonam"), "Amrutha")
+        # Feb 21, 2019 (a Thursday) with Pooram, Uthiram and Hastham: Siddha, Marana, Siddha.
+        self.assertEqual(pu.tamil_yogam_for("Thursday", "Pooram"), "Siddha")
+        self.assertEqual(pu.tamil_yogam_for("Thursday", "Uthiram"), "Marana")
+        self.assertEqual(pu.tamil_yogam_for("Thursday", "Hastham"), "Siddha")
+
+    def test_accepts_names_and_indices(self):
+        self.assertEqual(pu.tamil_yogam_for("friday", "Kettai"), "Marana")
+        self.assertEqual(pu.tamil_yogam_for(4, pu.resolve_nakshatra_index("Kettai")), "Marana")  # 4 = Friday
+        self.assertEqual(pu.tamil_yogam_for("Wednesday", "Jyeshtha"), "Siddha")  # English name
+        with self.assertRaises(ValueError):
+            pu.tamil_yogam_for("Funday", "Kettai")
+
+    def test_mypanchang_publishes_this_chart(self):
+        # mypanchang.com's "Tamil Yoga" column, independently published, matches
+        # the chart at noon on every captured day, except in 3 of the 189 cells,
+        # where its table says Marana but the Pambu chart clearly says Siddha
+        # (re-checked against the chart image).
+        known_different_cells = {("Thursday", "Kettai"), ("Friday", "Pooraadam"), ("Monday", "Chithirai")}
+        checked = 0
+        for path in sorted(MYPANCHANG_FIXTURES_DIR.glob("*.html")):
+            city, year, month = path.stem.rsplit("_", 2)
+            for day, (nak, published) in _mypanchang_noon_rows(path, int(year), int(month)).items():
+                with self.subTest(city=city, day=day):
+                    expected = pu.tamil_yogam_for(day.weekday(), nak)
+                    cell = (pu._WEEKDAY_NAMES[day.weekday()], pu.NAKSHATRAS[nak]["Tamil"])
+                    if cell in known_different_cells:
+                        self.assertNotEqual(published, expected)
+                    else:
+                        self.assertEqual(published, expected)
+                checked += 1
+        self.assertGreaterEqual(checked, 230)
+
+    def test_drikpanchang_published_tamil_yogam_is_reference_only(self):
+        # drikpanchang.com publishes Tamil Yogam from a different table; it's kept
+        # (as _tam_yogam_segments) for reference but no longer drives results.
+        # Pin how often it agrees with the chart on the Sunnyvale September fixtures
+        # so a change on either side is noticed.
+        agree = total = 0
+        for path in sorted(SUNNYVALE_SEPTEMBER_2026_FIXTURES_DIR.glob("*.html")):
+            day = date(2026, 9, int(path.stem[:2]))
+            result = pu._parse_day_panchang(path.read_text(encoding="utf-8"), day)
+            nak = pu._value_at(result["_nakshatram_segments"], 12 * 60)
+            published = pu._value_at(result["_tam_yogam_segments"], 12 * 60)
+            agree += published == pu.tamil_yogam_for(day.weekday(), nak)
+            total += 1
+        self.assertEqual((agree, total), (8, 17))
+
+    def test_gemini_method_2_does_not_reproduce_the_chart(self):
+        # "Method 2" (anchor star + count mod 7) was offered as an equivalent way to
+        # compute Tamil Yogam. It isn't: taken literally it matches 32 of 189 cells,
+        # and no mapping of its 7 remainders onto Siddha/Amrutha/Marana beats simply
+        # answering "Siddha" everywhere (115 of 189). So the chart is the definition.
+        import itertools
+
+        cells = [(w, n) for w in range(7) for n in range(pu.NUM_NAKSHATRAS)]
+        chart = {(w, n): pu.tamil_yogam_for(w, n) for w, n in cells}
+        literal = {4: "Amrutha", 6: "Siddha", 3: "Marana"}
+        self.assertEqual(sum(literal.get(_gemini_method_2(w, n)) == chart[(w, n)] for w, n in cells), 32)
+        all_siddha = sum(v == "Siddha" for v in chart.values())
+        best = max(
+            sum(mapping[_gemini_method_2(w, n)] == chart[(w, n)] for w, n in cells)
+            for mapping in itertools.product(("Siddha", "Amrutha", "Marana"), repeat=7)
+        )
+        self.assertEqual(all_siddha, 115)
+        self.assertEqual(best, all_siddha)
+
+    def test_vedic_weekday_applies_before_sunrise(self):
+        # Sep 11, 2026 (Friday) in Sunnyvale: Hastham starts at 12:25 AM on Sep 12 --
+        # still the Vedic Friday until sunrise, so Friday's row applies (Amrutha).
+        path = SUNNYVALE_SEPTEMBER_2026_FIXTURES_DIR / "11-09-2026.html"
+        result = pu._parse_day_panchang(path.read_text(encoding="utf-8"), date(2026, 9, 11))
+        self.assertEqual(
+            pu._build_favorable_entry(result, favorable_nakshatram_indices("Uthiradam")),
+            "September 11, 2026 - from September 12, 2026 12:25 AM onwards",
+        )
+
+    def test_next_sunrise_follows_daylight_saving_change(self):
+        # US DST ends on Nov 1, 2026: clocks go back an hour overnight, so the Vedic
+        # Saturday that starts at sunrise on Oct 31 ends an hour earlier on the clock.
+        self.assertEqual(pu._utc_offset_change_minutes(resolve_geoname_id("Sunnyvale"), date(2026, 10, 31)), -60)
+        self.assertEqual(pu._utc_offset_change_minutes(resolve_geoname_id("Chennai"), date(2026, 10, 31)), 0)
 
 
 if __name__ == "__main__":

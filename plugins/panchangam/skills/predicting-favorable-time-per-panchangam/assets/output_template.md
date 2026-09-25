@@ -12,6 +12,7 @@ The input value for the placeholder marked with {} is same as the input passed t
 | **City** | {input_city_name} |
 | **Favorable weekdays** | {fav_days_of_week} |
 | **Forecast window** | {forward_looking_months} months from {starting_month_year} |
+| **Day** | Sunrise to the next sunrise (Vedic day); Tamil Yogam per the Pambu Panchangam chart |
 
 ---
 ## September 2026 — 9 favorable days
@@ -71,3 +72,11 @@ Use this for `panchangam_utils.py group` results (`{A}_{B}_{starting_month_year}
 ```
 (The rows above are illustrative placeholders; always use the values from the JSON.)
 
+## Reading the "Favorable window" column
+Days are Vedic days, running from sunrise to the next sunrise (each JSON row carries that day's `sunrise`):
+- "Entire day" means from sunrise to the next sunrise.
+- "until T" means from sunrise until T.
+- "from T onwards" means from T until the next sunrise. T can be after midnight, e.g. "from September 12, 2026 12:25 AM onwards" on a Friday row is still the Vedic Friday.
+- "(favorable until D T)" means the window ends at T on the next date D.
+
+When presenting, show the sunrise for "Entire day" and "until" rows, e.g. "Entire day (from 06:46 AM sunrise)".

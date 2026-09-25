@@ -1,6 +1,6 @@
 {
   "name": "panchangam",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Predict favorable days and time windows from a person's birth Nakshatram, favorable weekdays and city, using drikpanchang.com daily Panchangam data.",
   "author": {
     "name": "Sreenaath",
