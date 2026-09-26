@@ -17,7 +17,7 @@ update. Personal results (`*_output_dir/`), `panchang_cache/`, `.venv/` and
 implementation is done and complete:
 `plugins/panchangam/skills/predicting-favorable-time-per-panchangam/scripts/panchangam_utils.py`
 (1000+ lines) satisfies the 1800+-line test suite in
-`scripts/test_panchangam_utils.py` (195 tests, all passing), the
+`scripts/test_panchangam_utils.py` (196 tests, all passing), the
 `scripts/tests_fixtures/` HTML fixtures it loads exist, and
 `scripts/requirements.txt` pins dependencies. `scripts/prompt.md` is a
 running log of every prompt that drove the implementation and its bug
@@ -46,7 +46,7 @@ inside `plugins/` so it isn't shipped with the skill. It parses the
 `prediction` strings built by `_build_favorable_entry` ("Entire day" / "until
 T" / "from T onwards" / "from T to T", joined by "; ", optional "(favorable
 until …)" suffix) — keep `parsePrediction()`/`validate()` there in sync with
-any change to that format or to `collate_and_save_predictions`' JSON shape.
+any change to that format or to `collate_and_save_predictions`' JSON shape. The viewer takes the requested weekdays from the JSON's `fav_days_of_week` (written since this field was added), falling back to inferring them from result dates for older files.
 
 ## What the skill does
 

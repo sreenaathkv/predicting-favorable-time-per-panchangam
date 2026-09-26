@@ -1260,6 +1260,7 @@ def collate_and_save_predictions(
     output_dir,
     favorable_days_with_ts,
     data_sources=None,
+    fav_days_of_week=None,
 ):
     """Collate every forward-looking month's favorable days into one consolidated JSON file.
 
@@ -1288,6 +1289,9 @@ def collate_and_save_predictions(
         "person": person,
         "input_nakshatram": input_nakshatram,
         "input_city_name": input_city_name,
+        # The weekdays that were asked for -- including any that turned out to have
+        # no favorable dates, which the month tables alone can't show.
+        **({"fav_days_of_week": list(fav_days_of_week)} if fav_days_of_week else {}),
         "starting_month_year": starting_month_year,
         "forward_looking_months": forward_looking_months,
         "tamil_yogam_method": TAMIL_YOGAM_METHOD,
@@ -1439,6 +1443,7 @@ def fetch_favorable_month_days(
         output_dir,
         favorable_days_with_ts,
         data_sources={"days_by_source": source_counts, "fallback_dates": fallback_dates},
+        fav_days_of_week=weekday_names,
     )
     for month_result in favorable_days_with_ts:
         month_result["consolidated_output_file"] = str(consolidated_file_path)

@@ -1450,6 +1450,34 @@ class TestFetchFavorableMonthDaysCollation(unittest.TestCase):
         for month_result in result:
             self.assertEqual(month_result["consolidated_output_file"], str(consolidated_path))
 
+    def test_consolidated_file_records_requested_weekdays_even_without_results(self):
+        import json
+        import tempfile
+
+        # Only never-favorable pages: no weekday produces a result, yet the JSON
+        # must still say which weekdays were requested (the viewer shows them).
+        session = _FixtureSession(
+            html_by_date={}, default_html=load_fixture("synthetic_never_favorable_for_uthiradam.html")
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fetch_favorable_month_days(
+                ["monday", "Wednesday", "Thursday", "Friday"],
+                "Uthiradam",
+                "Chennai",
+                "January 2026",
+                forward_looking_months=1,
+                person="Sreenaath",
+                output_dir=tmp_dir,
+                use_cache=False,
+                request_delay_seconds=0,
+                session=session,
+            )
+            data = json.loads(
+                (Path(tmp_dir) / "Sreenaath" / "Chennai" / "Sreenaath_January_2026_1.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(data["fav_days_of_week"], ["Monday", "Wednesday", "Thursday", "Friday"])
+        self.assertEqual(data["months"][0]["favorable_days"], [])
+
     def test_consolidated_file_reflects_actual_favorable_days(self):
         import json
         import tempfile

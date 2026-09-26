@@ -7,7 +7,7 @@ A single-page viewer for the consolidated `.json` results the
 - **Open JSON file(s)**, **drag and drop**, or **Open output folder** to load every
   prediction under a `{person}_output_dir/` at once (one tab per person/city/window).
 - List view with a 24-hour bar for each favorable window, plus a month calendar view.
-- Filter by weekday, full days only, or hide past dates. Highlights today and the next
+- Filter by weekday (every *requested* weekday is shown with its count; one with no favorable dates appears greyed out as `0`, so it isn't mistaken for not having been requested), full days only, or hide past dates. Highlights today and the next
   favorable day. Prints cleanly. Light and dark themes.
 - **Privacy:** files are read with the browser's File API and never leave your
   machine. The page has no backend and makes no network requests besides loading
